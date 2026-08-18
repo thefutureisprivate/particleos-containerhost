@@ -30,11 +30,6 @@ done
 
 shopt -s nullglob
 roothashes=("$sources"/ParticleOS-Host_*.roothash)
-if [[ ${#roothashes[@]} -eq 0 ]]; then
-    # The final PCR round signs only the rebuilt UKI. Verity was already
-    # attached in the preceding round, so no GPT definition needs rewriting.
-    exec "$upstream_helper" "$@"
-fi
 [[ ${#roothashes[@]} -eq 1 ]] || {
     echo "Expected one ParticleOS host roothash, found ${#roothashes[@]}" >&2
     exit 1
@@ -101,20 +96,3 @@ for suffix in manifest.gz osrelease; do
     }
     install -m0644 "$artifact" "$output/${artifact##*/}"
 done
-
-# PCR policy signing requires one additional OBS signing round after the
-# verity/bootloader round. Carry this wrapper and its BuildScripts directive
-# forward whenever upstream staged another hash archive.
-if [[ -f "$output/hashes.cpio.rsasign" ]]; then
-    install -m0755 "$0" "$output/particleos-containerhost-obs-build"
-    if ! grep -qF \
-        'BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-obs-build' \
-        "$output/mkosi.conf"; then
-        cat >>"$output/mkosi.conf" <<'EOF'
-
-[Content]
-BuildScripts=
-BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-obs-build
-EOF
-    fi
-fi

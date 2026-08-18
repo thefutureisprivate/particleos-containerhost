@@ -46,6 +46,14 @@ Secure Boot policy rather than a particular OS version, allowing signed A/B
 updates without resealing for every release. A Secure Boot policy change may
 require recovery and token reenrollment.
 
+The state token intentionally has no additional public-key PCR11 policy. OBS
+uses an RSA-4096 project key, which is valid for firmware and software
+signature verification but exceeds the external RSA key size supported by
+many TPM 2.0 implementations. Allowing systemd to discover that key as a TPM
+policy key would create a token that those TPMs cannot unseal. PCR7 provides
+the intended stable binding to the enrolled Secure Boot policy without tying
+state to one UKI version or to TPM-specific RSA capabilities.
+
 ## Workload isolation
 
 Podman runs as root and invokes `/usr/libexec/gvisor/runsc` with the systrap

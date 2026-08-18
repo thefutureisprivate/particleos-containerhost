@@ -29,6 +29,8 @@ require_fixed 'enforcing=1' mkosi.conf 'SELinux enforcement is on the signed com
 require_fixed 'lockdown=confidentiality' mkosi.conf 'kernel lockdown is enforced'
 require_fixed 'module.sig_enforce=1' mkosi.conf 'kernel module signatures are enforced'
 require_fixed 'Include=mkosi-obs' mkosi.obs.conf 'upstream OBS signer is included'
+require_fixed 'SplitArtifacts=uki,partitions,roothash,os-release,repart-definitions' mkosi.obs.conf 'OBS suppresses incompatible expected-PCR artifacts'
+reject_fixed 'SplitArtifacts=pcrs' mkosi.obs.conf 'OBS does not request a PCR11 public-key policy'
 require_fixed 'needssslcertforbuild' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS project certificate is requested'
 require_fixed '[Content]' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS image closure uses the mkosi Content section'
 require_fixed '        basesystem' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS stages the implicit Fedora base package'
@@ -109,7 +111,8 @@ require_fixed '0fbab5c58efbdf6d31e8085214f2dd821659c03d73cff3ed2b08e98826ea1cd9'
 require_fixed 'release-20260810.0' .obs/runsc/runsc.spec 'RPM verifies the installed runsc version'
 # Literal implementation string, not an expression for this validator.
 # shellcheck disable=SC2016
-require_fixed 'if [[ -f "$output/hashes.cpio.rsasign" ]]' mkosi.scripts/obs-build 'OBS wrapper survives every required PCR signing round'
+require_fixed '[[ ${#roothashes[@]} -eq 1 ]]' mkosi.scripts/obs-build 'OBS wrapper requires the signed verity input'
+reject_fixed 'PCR policy signing requires' mkosi.scripts/obs-build 'obsolete PCR signing round is absent'
 
 python3 - <<'PY' || failures=$((failures + 1))
 import xml.etree.ElementTree as ET

@@ -33,7 +33,10 @@ for setting in \
     'systemd.verity_usr_options=root-hash-signature=auto'; do
     grep -qF "$setting" <<<"$uki_details"
 done
-grep -q '^.pcrsig:' <<<"$uki_details"
+if grep -qE '^\.pcr(sig|pkey):' <<<"$uki_details"; then
+    echo 'UKI unexpectedly contains a TPM-incompatible public-key PCR policy' >&2
+    exit 1
+fi
 gzip -t "$manifest"
 zgrep -q '"name": "runsc"' "$manifest"
 zgrep -q '"name": "podman"' "$manifest"
@@ -98,4 +101,4 @@ grep -qxF 'Type=root' "$runtime/40-root.conf"
 grep -qxF 'Encrypt=tpm2' "$runtime/40-root.conf"
 grep -qxF 'TPM2PCRs=7' "$runtime/40-root.conf"
 
-echo 'Signed UKI, PCR policy, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'
+echo 'Signed UKI, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'
