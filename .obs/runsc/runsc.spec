@@ -8,6 +8,7 @@ URL:            https://gvisor.dev/
 Source0:        gvisor.tar.bz2
 Source1:        LICENSE.gvisor
 ExclusiveArch:  x86_64
+%global debug_package %{nil}
 
 %description
 Official, release-pinned gVisor runsc binaries for rootful OCI workloads. The
@@ -25,7 +26,7 @@ install -Dpm0755 runsc %{buildroot}%{_libexecdir}/gvisor/runsc
 install -d -m0755 %{buildroot}%{_libexecdir}/gvisor/gvisor-bin
 install -m0755 gvisor-bin/* %{buildroot}%{_libexecdir}/gvisor/gvisor-bin/
 install -d -m0755 %{buildroot}%{_bindir}
-ln -s %{_libexecdir}/gvisor/runsc %{buildroot}%{_bindir}/runsc
+ln -s ../libexec/gvisor/runsc %{buildroot}%{_bindir}/runsc
 
 %check
 test "$(%{buildroot}%{_libexecdir}/gvisor/runsc --version | sed -n 's/^runsc version //p')" = "release-20260810.0"
@@ -38,3 +39,5 @@ test "$(%{buildroot}%{_libexecdir}/gvisor/runsc --version | sed -n 's/^runsc ver
 %{_libexecdir}/gvisor/gvisor-bin/
 
 %changelog
+* Tue Aug 18 2026 The future is private. <contact@thefutureisprivate.dev> - 20260810.0-1
+- Package the checksum-pinned official gVisor runsc release.
