@@ -139,6 +139,11 @@ require_fixed 'release-20260810.0' .obs/runsc/runsc.spec 'RPM verifies the insta
 # shellcheck disable=SC2016
 require_fixed '[[ ${#roothashes[@]} -eq 1 ]]' mkosi.scripts/obs-build 'OBS wrapper requires the signed verity input'
 reject_fixed 'PCR policy signing requires' mkosi.scripts/obs-build 'obsolete PCR signing round is absent'
+# Literal implementation strings, not expressions for this validator.
+# shellcheck disable=SC2016
+require_fixed 'sha256sum -- "${artifact_names[@]}"' mkosi.scripts/obs-build 'checksums are regenerated after final signed artifacts are staged'
+# shellcheck disable=SC2016
+require_fixed 'sha256sum -c "${checksum_manifest##*/}"' scripts/validate-artifacts.sh 'artifact validation verifies the published checksum manifest'
 
 python3 - <<'PY' || failures=$((failures + 1))
 import xml.etree.ElementTree as ET

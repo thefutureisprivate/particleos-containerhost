@@ -21,6 +21,23 @@ uki="$(one_artifact 'ParticleOS-Host_*.efi')"
 manifest="$(one_artifact 'ParticleOS-Host_*.manifest.gz')"
 os_release="$(one_artifact 'ParticleOS-Host_*.osrelease')"
 repart_archive="$(one_artifact 'ParticleOS-Host_*.repart.tar')"
+checksum_manifest="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS')"
+
+(
+    cd "$directory"
+    sha256sum -c "${checksum_manifest##*/}"
+)
+mapfile -t checksummed_names < <(
+    sed -E 's/^[[:xdigit:]]{64} [ *]//' "$checksum_manifest" | sort
+)
+mapfile -t published_names < <(
+    find "$directory" -maxdepth 1 -type f \
+        -name 'ParticleOS-Host_*' \
+        ! -name '*.SHA256SUMS' ! -name '*.sha256' ! -name '*.asc' \
+        -printf '%f\n' | sort
+)
+[[ ${#checksummed_names[@]} -eq ${#published_names[@]} ]]
+[[ $(printf '%s\n' "${checksummed_names[@]}") == $(printf '%s\n' "${published_names[@]}") ]]
 
 sbverify --list "$uki" | grep -q 'signature certificates'
 uki_details="$(ukify inspect "$uki")"
@@ -101,4 +118,4 @@ grep -qxF 'Type=root' "$runtime/40-root.conf"
 grep -qxF 'Encrypt=tpm2' "$runtime/40-root.conf"
 grep -qxF 'TPM2PCRs=7' "$runtime/40-root.conf"
 
-echo 'Signed UKI, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'
+echo 'Checksums, signed UKI, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'

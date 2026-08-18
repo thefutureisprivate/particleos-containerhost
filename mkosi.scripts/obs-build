@@ -96,3 +96,24 @@ for suffix in manifest.gz osrelease; do
     }
     install -m0644 "$artifact" "$output/${artifact##*/}"
 done
+
+# mkosi's first pass writes SHA256SUMS before OBS injects the signatures. The
+# second pass replaces the UKI and raw image, so publish a checksum manifest
+# generated only after every final artifact has been staged.
+checksum_name="${image_id}_${image_version}_x86-64.SHA256SUMS"
+mapfile -d '' artifact_names < <(
+    find "$output" -maxdepth 1 -type f \
+        -name "${image_id}_${image_version}_x86-64.*" \
+        ! -name "$checksum_name" ! -name '*.sha256' ! -name '*.asc' \
+        -printf '%f\0' | sort -z
+)
+[[ ${#artifact_names[@]} -ge 8 ]] || {
+    echo "Expected the complete final artifact set, found ${#artifact_names[@]} files" >&2
+    exit 1
+}
+checksum_tmp="$output/.${checksum_name}.tmp"
+(
+    cd "$output"
+    sha256sum -- "${artifact_names[@]}"
+) >"$checksum_tmp"
+mv -f -- "$checksum_tmp" "$output/$checksum_name"
