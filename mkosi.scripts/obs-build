@@ -30,6 +30,11 @@ done
 
 shopt -s nullglob
 roothashes=("$sources"/ParticleOS-Host_*.roothash)
+if [[ ${#roothashes[@]} -eq 0 ]]; then
+    # The final PCR round signs only the rebuilt UKI. Verity was already
+    # attached in the preceding round, so no GPT definition needs rewriting.
+    exec "$upstream_helper" "$@"
+fi
 [[ ${#roothashes[@]} -eq 1 ]] || {
     echo "Expected one ParticleOS host roothash, found ${#roothashes[@]}" >&2
     exit 1
