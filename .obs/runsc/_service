@@ -7,8 +7,8 @@
   </service>
   <service name="verify_file">
     <param name="file">_service:download_url:gvisor.tar.bz2</param>
-    <param name="verifier">sha512</param>
-    <param name="checksum">3de91138cda15682c11807387f6ecad9e7c8932262018a2813277e1b4efa03efe33b0a948e148c6b1ccfe7345bfab5d5e0d072519505465751273898bae19c62</param>
+    <param name="verifier">sha256</param>
+    <param name="checksum">3eca0158249c6b9b1f0d96c8f429c2aec6a4bcabd1a549bf25b15e48ca6d1d0c</param>
   </service>
   <service name="download_url">
     <param name="protocol">https</param>
