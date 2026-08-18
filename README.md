@@ -58,6 +58,13 @@ The `runsc` OBS package is built independently from an exact official gVisor
 release archive and pinned checksums. The image consumes that package plus the
 existing `hardened_malloc`, `ipe-policy`, and `no_rlimit_as` packages.
 
+Production packages are published as
+[`home:thefutureisprivate/particleos-containerhost`](https://build.opensuse.org/package/show/home:thefutureisprivate/particleos-containerhost)
+and [`home:thefutureisprivate/runsc`](https://build.opensuse.org/package/show/home:thefutureisprivate/runsc).
+The live image service is pinned to a reviewed signed Git commit; the tracked
+`_service.example` documents the exact source-service shape without creating a
+self-referential revision update in Git.
+
 ## Upstream and reference provenance
 
 The initial baseline is upstream ParticleOS commit `dd4fdc2`. The previous

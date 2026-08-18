@@ -107,6 +107,8 @@ require_fixed 'release/20260810.0/x86_64/gvisor.tar.bz2' "$service" 'gVisor rele
 require_fixed '3eca0158249c6b9b1f0d96c8f429c2aec6a4bcabd1a549bf25b15e48ca6d1d0c' "$service" 'gVisor archive SHA-256 is pinned'
 require_fixed '0fbab5c58efbdf6d31e8085214f2dd821659c03d73cff3ed2b08e98826ea1cd9' "$service" 'gVisor license SHA-256 is pinned'
 require_fixed 'release-20260810.0' .obs/runsc/runsc.spec 'RPM verifies the installed runsc version'
+# Literal implementation string, not an expression for this validator.
+# shellcheck disable=SC2016
 require_fixed 'if [[ -f "$output/hashes.cpio.rsasign" ]]' mkosi.scripts/obs-build 'OBS wrapper survives every required PCR signing round'
 
 python3 - <<'PY' || failures=$((failures + 1))
