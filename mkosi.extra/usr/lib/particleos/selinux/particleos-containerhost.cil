@@ -24,6 +24,9 @@
   (allow .init_t .chronyd_t (process2 (nosuid_transition)))
   (allow .init_t .bootloader_t (process2 (nosuid_transition)))
   (allow .init_t .container_runtime_t (process2 (nosuid_transition)))
+  ; Root-owned system services may launch Podman or runsc directly. Keep this
+  ; limited to the dedicated container-runtime domain on authenticated /usr.
+  (allow .initrc_t .container_runtime_t (process2 (nosuid_transition)))
   (allow .udev_t .systemd_sysctl_t (process2 (nosuid_transition)))
   (allow .udev_t .lvm_t (process2 (nosuid_transition)))
   (allow .sshd_keygen_t .ssh_keygen_t (process2 (nosuid_transition)))

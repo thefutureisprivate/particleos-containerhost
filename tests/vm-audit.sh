@@ -62,7 +62,8 @@ fi
 state=/dev/disk/by-partlabel/ParticleOS-Host-root
 if [[ -b $state ]]; then pass 'persistent state partition exists'; else fail 'persistent state partition exists'; fi
 luks_metadata=$(cryptsetup luksDump --dump-json-metadata "$state" 2>/dev/null || true)
-if grep -qE '"tpm2-pcrs"[[:space:]]*:[[:space:]]*\[[[:space:]]*7[[:space:]]*\]' <<<"$luks_metadata"; then
+luks_metadata_compact=$(tr -d '[:space:]' <<<"$luks_metadata")
+if grep -qF '"tpm2-pcrs":[7]' <<<"$luks_metadata_compact"; then
     pass 'state TPM token is bound to PCR 7'
 else
     fail 'state TPM token is bound to PCR 7'
@@ -141,7 +142,8 @@ if [[ $(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null) == false
 else
     fail 'Podman is rootful'
 fi
-if runsc --version | grep -qF 'release-20260810.0'; then pass 'the pinned gVisor release is installed'; else fail 'the pinned gVisor release is installed'; fi
+runsc=/usr/libexec/gvisor/runsc
+if "$runsc" --version | grep -qF 'release-20260810.0'; then pass 'the pinned gVisor release is installed'; else fail 'the pinned gVisor release is installed'; fi
 
 install -d -m 0700 /run/particleos-runsc-audit/root /run/particleos-runsc-audit/bundle
 ln -sfn /usr /run/particleos-runsc-audit/bundle/rootfs
@@ -172,11 +174,11 @@ cat >/run/particleos-runsc-audit/bundle/config.json <<'JSON'
   }
 }
 JSON
-if runsc --platform=systrap --root=/run/particleos-runsc-audit/root run \
+if "$runsc" --platform=systrap --root=/run/particleos-runsc-audit/root run \
         --bundle=/run/particleos-runsc-audit/bundle particleos-audit; then
     pass 'runsc executes an OCI bundle with systrap'
 else
-    runsc --root=/run/particleos-runsc-audit/root delete --force particleos-audit 2>/dev/null || true
+    "$runsc" --root=/run/particleos-runsc-audit/root delete --force particleos-audit 2>/dev/null || true
     fail 'runsc executes an OCI bundle with systrap'
 fi
 
@@ -186,19 +188,17 @@ if [[ ! -e /usr/bin/newuidmap && ! -e /usr/bin/newgidmap &&
 else
     fail 'rootless container helpers are absent'
 fi
-if [[ $(sysctl -n kernel.unprivileged_userns_clone) == 0 ]]; then
+userns_clone=/proc/sys/kernel/unprivileged_userns_clone
+if { [[ ! -e $userns_clone ]] || [[ $(<"$userns_clone") == 0 ]]; } &&
+        ! setpriv --reuid=nobody --regid=nobody --clear-groups \
+            unshare --user true 2>/dev/null; then
     pass 'unprivileged user namespaces are disabled'
 else
     fail 'unprivileged user namespaces are disabled'
 fi
 
-if python3 - <<'PY'
-import json
-with open('/etc/containers/policy.json', encoding='utf-8') as policy_file:
-    policy = json.load(policy_file)
-assert policy == {'default': [{'type': 'reject'}], 'transports': {}}
-PY
-then
+oci_policy=$(tr -d '[:space:]' </etc/containers/policy.json)
+if [[ $oci_policy == '{"default":[{"type":"reject"}],"transports":{}}' ]]; then
     pass 'OCI image policy is exact default deny'
 else
     fail 'OCI image policy is exact default deny'
@@ -222,8 +222,9 @@ else
 fi
 if [[ $(systemctl is-enabled sshd.socket 2>/dev/null) == disabled ]]; then pass 'SSH remains disabled'; else fail 'SSH remains disabled'; fi
 check_grep 'SSH root login is prohibited' '^PermitRootLogin no$' /etc/ssh/sshd_config.d/40-particleos-hardening.conf
-check_grep 'strict DNS-over-TLS is configured' '^DNSOverTLS=yes$' /etc/systemd/resolved.conf.d/40-particleos-dns.conf
-check_grep 'DNSSEC validation is configured' '^DNSSEC=yes$' /etc/systemd/resolved.conf.d/40-particleos-dns.conf
+dns_policy=/usr/lib/systemd/resolved.conf.d/40-particleos-dns.conf
+check_grep 'strict DNS-over-TLS is configured' '^DNSOverTLS=yes$' "$dns_policy"
+check_grep 'DNSSEC validation is configured' '^DNSSEC=yes$' "$dns_policy"
 
 if ((failures == 0)); then
     printf 'PARTICLEOS_VM_AUDIT_PASS checks=%d\n' "$checks"
