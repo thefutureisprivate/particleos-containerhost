@@ -23,6 +23,9 @@ cat /sys/kernel/security/ipe/policies/*/active
 podman info --format '{{.Host.OCIRuntime.Name}}'
 runsc --version
 systemd-sysupdate list
+systemctl --failed
+nft list table inet particleos_filter
+sysctl kernel.modules_disabled
 ```
 
 Expected results include Secure Boot enabled, SELinux `Enforcing`, `runsc` as
@@ -30,7 +33,18 @@ the OCI runtime, and two OS-version slots. Device names vary; inspect them with
 `systemd-repart --json=pretty /dev/<disk>` before using enrollment commands.
 The LUKS2 token must list PCR 7 under `tpm2-hash-pcrs` and must not contain a
 `tpm2-pubkey-pcrs` field. `systemd-tpm2-setup-early.service` and the generated
-root cryptsetup unit must both complete successfully.
+root cryptsetup unit must both complete successfully. The failed-unit list must
+be empty, all three host firewall base chains must have policy `drop`, and
+`kernel.modules_disabled` must be `1`. NvPCR product/login measurements and
+pcrlock activation are intentionally masked because this image does not ship a
+separate PCR-policy signing key.
+
+For release qualification, inject `tests/vm-audit.sh` with
+`tests/vm-audit.service` as QEMU system credentials rather than adding a test
+account or debug unit to the image. Run it on the first boot and again with the
+same disk, OVMF variable store, and TPM state. Both boots must end in
+`PARTICLEOS_VM_AUDIT_PASS`; this also proves that the second boot unlocked the
+persistent state without an interactive secret.
 
 ## Administrative access
 

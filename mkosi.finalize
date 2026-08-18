@@ -9,6 +9,14 @@ for unit in \
     systemd-binfmt.service \
     proc-sys-fs-binfmt_misc.automount \
     proc-sys-fs-binfmt_misc.mount \
+    authselect-apply-changes.service \
+    systemd-homed.service \
+    systemd-homed-firstboot.service \
+    systemd-pcrlogin@.service \
+    systemd-pcrnvdone.service \
+    systemd-pcrproduct.service \
+    systemd-pcrlock.socket \
+    systemd-sysupdate-notify-pcrlock.socket \
     sshd-keygen.target; do
     ln --symbolic --force /dev/null "$BUILDROOT/usr/lib/systemd/system/$unit"
 done

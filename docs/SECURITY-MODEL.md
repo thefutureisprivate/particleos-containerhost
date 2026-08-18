@@ -54,6 +54,14 @@ policy key would create a token that those TPMs cannot unseal. PCR7 provides
 the intended stable binding to the enrolled Secure Boot policy without tying
 state to one UKI version or to TPM-specific RSA capabilities.
 
+Current systemd also ships an optional NvPCR and pcrlock stack that needs a
+separate TPM-compatible PCR signing key. ParticleOS does not pretend the OBS
+Secure Boot key can fill that role: the unused NvPCR definitions and their
+login/product measurement units are removed or masked, as are the on-demand
+pcrlock sockets. Ordinary UKI boot-phase PCR measurements and early SRK setup
+remain enabled. This keeps the selected security property explicit: stable
+PCR7 sealing of state, with no unusable auxiliary TPM policy.
+
 ## Workload isolation
 
 Podman runs as root and invokes `/usr/libexec/gvisor/runsc` with the systrap
@@ -95,6 +103,10 @@ has default-deny input, forwarding, and output chains. It permits DHCP, ICMP,
 NTS/NTP, signed OS update HTTPS, root-operated TLS registry access, SSH, and the
 minimum Podman bridge/DNAT forwarding paths. Netavark owns its separate Podman
 nftables state; host rules do not flush the full ruleset.
+
+The signed `nft_hash` and `nft_limit` expression modules are loaded before the
+ruleset so ICMP, SSH, and updater rate limits are available. After the firewall
+is active, ParticleOS irreversibly disables further kernel module loading.
 
 This baseline allows broad outbound TLS by root because root invokes image
 pulls. Repository-specific destination filtering belongs to site provisioning

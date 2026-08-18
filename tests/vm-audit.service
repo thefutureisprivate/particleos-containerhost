@@ -1,0 +1,13 @@
+[Unit]
+Description=ParticleOS local VM security audit
+ConditionPathExists=!/etc/initrd-release
+After=nftables.service particleos-module-lockdown.service systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+LoadCredential=vm-audit
+ExecStart=/usr/bin/bash %d/vm-audit
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyS0
+TimeoutStartSec=3min

@@ -29,6 +29,7 @@ disable podman.service
 disable podman.socket
 disable podman-auto-update.timer
 disable podman-restart.service
+disable authselect-apply-changes.service
 disable systemd-homed.service
 disable systemd-homed-firstboot.service
 disable systemd-importd.socket

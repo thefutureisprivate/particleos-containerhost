@@ -31,6 +31,7 @@ require_fixed 'module.sig_enforce=1' mkosi.conf 'kernel module signatures are en
 require_fixed 'Include=mkosi-obs' mkosi.obs.conf 'upstream OBS signer is included'
 require_fixed 'SplitArtifacts=uki,partitions,roothash,os-release,repart-definitions' mkosi.obs.conf 'OBS suppresses incompatible expected-PCR artifacts'
 reject_fixed 'SplitArtifacts=pcrs' mkosi.obs.conf 'OBS does not request a PCR11 public-key policy'
+require_fixed '/usr/lib/nvpcr' mkosi.conf 'unused NvPCR definitions are removed'
 require_fixed 'needssslcertforbuild' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS project certificate is requested'
 require_fixed '[Content]' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS image closure uses the mkosi Content section'
 require_fixed '        basesystem' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS stages the implicit Fedora base package'
@@ -82,6 +83,17 @@ require_fixed '(deny userns_restricted_domain self (user_namespace (create)))' m
 require_fixed '.container_runtime_t' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'gVisor runtime domain has the narrow namespace exception'
 require_fixed 'SELINUX=enforcing' mkosi.extra/etc/selinux/config 'SELinux is enforcing in userspace'
 require_fixed 'authselect select local --force' mkosi.postinst.chroot 'Fedora local authentication profile is explicit'
+for unit in \
+    authselect-apply-changes.service \
+    systemd-homed.service \
+    systemd-homed-firstboot.service \
+    systemd-pcrlogin@.service \
+    systemd-pcrnvdone.service \
+    systemd-pcrproduct.service \
+    systemd-pcrlock.socket \
+    systemd-sysupdate-notify-pcrlock.socket; do
+    require_fixed "$unit" mkosi.finalize "$unit is immutably masked"
+done
 
 # Literal implementation strings, not expressions for this validator.
 # shellcheck disable=SC2016
@@ -96,6 +108,7 @@ require_fixed 'DNSOverTLS=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-pa
 require_fixed 'DNSSEC=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-particleos-dns.conf 'DNSSEC is enabled'
 
 firewall=mkosi.extra/usr/lib/particleos/nftables.conf
+require_fixed 'destroy table inet particleos_filter' "$firewall" 'host firewall reload is atomic and idempotent'
 require_fixed 'chain input {' "$firewall" 'host input firewall exists'
 require_fixed 'type filter hook input priority filter; policy drop;' "$firewall" 'input is default deny'
 require_fixed 'type filter hook forward priority filter; policy drop;' "$firewall" 'forwarding is default deny'
@@ -103,6 +116,12 @@ require_fixed 'type filter hook output priority filter; policy drop;' "$firewall
 require_fixed 'iifname "podman*" accept' "$firewall" 'rootful Podman outbound forwarding is allowed'
 require_fixed 'oifname "podman*" ct status dnat accept' "$firewall" 'only DNATed Podman ingress is forwarded'
 reject_fixed 'flush ruleset' "$firewall" 'host policy does not erase Netavark rules'
+require_fixed 'nft_hash' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables meter support loads before module lockdown'
+require_fixed 'nft_limit' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables rate limiting loads before module lockdown'
+reject_fixed 'nft delete table inet particleos_filter' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall startup has no expected deletion error'
+require_fixed 'LoadCredential=vm-audit' tests/vm-audit.service 'VM audit is injected without modifying the image'
+require_fixed 'runsc --platform=systrap' tests/vm-audit.sh 'VM audit executes a real systrap sandbox'
+require_fixed 'PARTICLEOS_VM_AUDIT_PASS' tests/vm-audit.sh 'VM audit has an unambiguous success marker'
 
 service=.obs/runsc/_service
 require_fixed 'release/20260810.0/x86_64/gvisor.tar.bz2' "$service" 'gVisor release archive is pinned'

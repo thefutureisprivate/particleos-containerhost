@@ -48,6 +48,17 @@ The normal local path uses current mkosi:
 mkosi build
 ```
 
+The production artifact is also exercised by `tests/vm-audit.sh` in a fresh
+QEMU/KVM guest with OVMF Secure Boot and swtpm. The audit is injected as a
+system credential through `tests/vm-audit.service`; neither file is installed
+in the image. It checks verified boot, dm-verity, PCR7-only state sealing,
+SELinux/IPE, A/B layout, failed units, nftables and module lockdown, Podman's
+runtime selection, an actual systrap sandbox, default-deny OCI policy,
+rootless-helper absence, set-ID state, SSH, and DNS policy. A second boot with
+the same disk, firmware variables, and TPM state verifies persistent automatic
+unlock. A successful run ends with `PARTICLEOS_VM_AUDIT_PASS` on the serial
+console.
+
 Local builds intentionally use only the signed `system:systemd` and
 `home:thefutureisprivate` OBS repositories configured in
 `mkosi.conf.d/10-local-repositories.conf`. OBS uses `.obs/` recipes and the
