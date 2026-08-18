@@ -30,6 +30,8 @@ require_fixed 'lockdown=confidentiality' mkosi.conf 'kernel lockdown is enforced
 require_fixed 'module.sig_enforce=1' mkosi.conf 'kernel module signatures are enforced'
 require_fixed 'Include=mkosi-obs' mkosi.obs.conf 'upstream OBS signer is included'
 require_fixed 'needssslcertforbuild' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS project certificate is requested'
+require_fixed '[Content]' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS image closure uses the mkosi Content section'
+require_fixed '        basesystem' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS stages the implicit Fedora base package'
 
 for type in usr usr-verity usr-verity-sig; do
     count="$(grep -rl "^Type=${type}$" mkosi.extra/usr/lib/repart.d | wc -l)"
