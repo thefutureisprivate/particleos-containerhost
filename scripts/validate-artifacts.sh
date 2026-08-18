@@ -16,7 +16,7 @@ one_artifact() {
     printf '%s' "${matches[0]}"
 }
 
-disk="$(one_artifact 'ParticleOS-Host_*.raw.zst')"
+disk="$(one_artifact 'ParticleOS-Host_*_x86-64.raw.zst')"
 uki="$(one_artifact 'ParticleOS-Host_*.efi')"
 manifest="$(one_artifact 'ParticleOS-Host_*.manifest.gz')"
 os_release="$(one_artifact 'ParticleOS-Host_*.osrelease')"

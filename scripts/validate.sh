@@ -28,6 +28,8 @@ require_fixed 'ipe.enforce=1' mkosi.conf 'IPE enforcement is on the signed comma
 require_fixed 'enforcing=1' mkosi.conf 'SELinux enforcement is on the signed command line'
 require_fixed 'lockdown=confidentiality' mkosi.conf 'kernel lockdown is enforced'
 require_fixed 'module.sig_enforce=1' mkosi.conf 'kernel module signatures are enforced'
+require_fixed 'systemd.firstboot=headless' mkosi.conf 'first boot is unattended without disabling noninteractive provisioning'
+require_fixed 'rd.systemd.mask=systemd-tpm2-setup-early.service' mkosi.conf 'the unused initrd NvPCR setup path is suppressed'
 require_fixed 'Include=mkosi-obs' mkosi.obs.conf 'upstream OBS signer is included'
 require_fixed 'SplitArtifacts=uki,partitions,roothash,os-release,repart-definitions' mkosi.obs.conf 'OBS suppresses incompatible expected-PCR artifacts'
 reject_fixed 'SplitArtifacts=pcrs' mkosi.obs.conf 'OBS does not request a PCR11 public-key policy'
@@ -87,6 +89,8 @@ for unit in \
     authselect-apply-changes.service \
     systemd-homed.service \
     systemd-homed-firstboot.service \
+    systemd-tpm2-setup-early.service \
+    systemd-tpm2-setup.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
     systemd-pcrproduct.service \

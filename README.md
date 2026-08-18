@@ -11,6 +11,7 @@ The mutable boundary is a TPM2-sealed LUKS2/Btrfs root partition. The OS is a
 signed, read-only `/usr` DDI with two A/B slots. Secure Boot authenticates the
 UKI and bootloader; the UKI authenticates the selected dm-verity root hash; IPE
 then prevents execution of host code outside the authenticated OS policy.
+First boot is headless and does not stop for optional recovery-key enrollment.
 
 Rootful Podman is the sole workload interface. Its default and only installed
 OCI runtime is release-pinned gVisor `runsc` using systrap. Containers are

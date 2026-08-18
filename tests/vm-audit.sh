@@ -72,13 +72,12 @@ if ! grep -q '"tpm2-pubkey-pcrs"' <<<"$luks_metadata"; then
 else
     fail 'state token has no public-key PCR11 dependency'
 fi
-for unit in systemd-tpm2-setup-early.service systemd-cryptsetup@root.service; do
-    if [[ $(systemctl show --property=Result --value "$unit" 2>/dev/null) == success ]]; then
-        pass "$unit completed successfully"
-    else
-        fail "$unit completed successfully"
-    fi
-done
+unit=systemd-cryptsetup@root.service
+if [[ $(systemctl show --property=Result --value "$unit" 2>/dev/null) == success ]]; then
+    pass "$unit completed successfully"
+else
+    fail "$unit completed successfully"
+fi
 
 partition_types=$(lsblk -nr -o PARTTYPE)
 for specification in \
@@ -101,6 +100,8 @@ for unit in \
     authselect-apply-changes.service \
     systemd-homed.service \
     systemd-homed-firstboot.service \
+    systemd-tpm2-setup-early.service \
+    systemd-tpm2-setup.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
     systemd-pcrproduct.service \

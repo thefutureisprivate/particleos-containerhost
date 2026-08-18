@@ -57,10 +57,16 @@ state to one UKI version or to TPM-specific RSA capabilities.
 Current systemd also ships an optional NvPCR and pcrlock stack that needs a
 separate TPM-compatible PCR signing key. ParticleOS does not pretend the OBS
 Secure Boot key can fill that role: the unused NvPCR definitions and their
-login/product measurement units are removed or masked, as are the on-demand
-pcrlock sockets. Ordinary UKI boot-phase PCR measurements and early SRK setup
-remain enabled. This keeps the selected security property explicit: stable
-PCR7 sealing of state, with no unusable auxiliary TPM policy.
+setup, login, and product measurement units are removed or masked, as are the
+on-demand pcrlock sockets. TPM enrollment and unlock use the standard LUKS2
+token directly; ordinary UKI boot-phase PCR measurements remain enabled. This
+keeps the selected security property explicit: stable PCR7 sealing of state,
+with no unusable auxiliary TPM policy.
+
+The signed command line selects `systemd.firstboot=headless`. Noninteractive
+first-boot provisioning still runs, but the generic appliance never blocks on
+locale, account, or optional LUKS recovery-key enrollment prompts. Recovery
+credentials are an explicit operator provisioning responsibility.
 
 ## Workload isolation
 

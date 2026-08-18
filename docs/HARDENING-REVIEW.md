@@ -13,7 +13,7 @@ host; “drop” means it was role-specific, obsolete, or harmful to this model.
 | A/B `systemd-sysupdate` | Retain | Four verified transfers update UKI, `/usr`, verity, and signature together. |
 | Separate role and service DDIs | Drop | The host is deliberately one generic image; workloads are signed OCI images. |
 | Built-in installer/live/debug/emergency UKIs | Drop | They expanded the signed attack surface and carried weaker boot parameters. |
-| TPM2 state encryption | Adapt | One PCR 7-bound LUKS2/Btrfs state partition replaces role-specific root/home/swap layouts; optional PCR11/NvPCR/pcrlock enrollment is suppressed because it requires a separate TPM-compatible policy-signing key and the RSA-4096 OBS key is not loadable by common TPMs. |
+| TPM2 state encryption | Adapt | One PCR 7-bound LUKS2/Btrfs state partition replaces role-specific root/home/swap layouts; optional PCR11/NvPCR/pcrlock enrollment and its setup units are suppressed because they require a separate TPM-compatible policy-signing key and the RSA-4096 OBS key is not loadable by common TPMs. First boot remains noninteractive. |
 | SELinux enforcing | Retain | Fedora targeted policy plus a small host-specific CIL module. |
 | Broad custom SELinux role policy | Drop | Application domains, databases, mail, DNS, proxy, and installer rules have no host purpose. |
 | User-namespace prohibition | Adapt | Login/service domains are denied; only trusted system helpers and gVisor's `container_runtime_t` may create them. |

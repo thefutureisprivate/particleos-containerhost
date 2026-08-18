@@ -12,6 +12,8 @@ for unit in \
     authselect-apply-changes.service \
     systemd-homed.service \
     systemd-homed-firstboot.service \
+    systemd-tpm2-setup-early.service \
+    systemd-tpm2-setup.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
     systemd-pcrproduct.service \
