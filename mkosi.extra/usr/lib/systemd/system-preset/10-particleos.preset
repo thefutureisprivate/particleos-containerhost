@@ -1,35 +1,40 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-# Make sure we have networking available.
 enable systemd-networkd.service
-enable systemd-networkd-wait-online.service
+disable systemd-networkd-wait-online.service
 enable systemd-resolved.service
+disable NetworkManager.service
+disable NetworkManager-wait-online.service
 
-# Enable NetworkManager as well for desktop environments. systemd-networkd won't
-# manage any interfaces by default and so shouldn't conflict with
-# NetworkManager.
-enable NetworkManager.service
-enable NetworkManager-wait-online.service
+disable systemd-timesyncd.service
+enable chronyd.service
+disable chrony-wait.service
 
-# These are not enabled by default in the default systemd preset.
-enable systemd-timesyncd.service
-enable systemd-homed-firstboot.service
+enable nftables.service
+enable particleos-module-lockdown.service
 
-# Disable avahi in favor of resolved
-disable avahi.*
-
-enable pcscd.service
-enable power-profiles-daemon.service
-
-# Our own service to run systemctl preset --global.
-enable preset-global.service
-
-# Should be enabled manually by the user after first boot.
-disable gdm.service
-
-# Prefer socket activated SSH over daemon SSH
+# Remote access is opt-in after an administrator account and Ed25519 key exist.
 disable sshd.service
-disable ssh.service
-enable sshd.socket
-enable ssh.socket
-enable sshd-keygen.service
+disable sshd.socket
+
+enable polkit-agent-helper.socket
+enable preset-global.service
+enable systemd-oomd.service
+enable systemd-sysupdate-update.timer
+disable systemd-sysupdate-reboot.timer
+enable systemd-boot-check-no-failures.service
+enable fstrim.timer
+
+disable podman.service
+disable podman.socket
+disable podman-auto-update.timer
+disable podman-restart.service
+disable systemd-homed.service
+disable systemd-homed-firstboot.service
+disable systemd-importd.socket
+disable systemd-machined.socket
+disable systemd-mountfsd.socket
+disable systemd-nsresourced.socket
+disable avahi-daemon.service
+disable avahi-daemon.socket
+disable debug-shell.service

@@ -1,0 +1,30 @@
+[Unit]
+Description=ParticleOS irreversible kernel module lockdown
+DefaultDependencies=no
+Requires=nftables.service systemd-modules-load.service
+After=nftables.service systemd-modules-load.service systemd-sysctl.service systemd-udevd.service
+Before=network-pre.target
+ConditionPathIsReadWrite=/proc/sys/kernel/modules_disabled
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/sysctl -q -w kernel.modprobe=
+ExecStart=/usr/sbin/sysctl -q -w kernel.modules_disabled=1
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_MODULE
+LockPersonality=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateIPC=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

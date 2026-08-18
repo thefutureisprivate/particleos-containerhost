@@ -1,0 +1,16 @@
+[Transfer]
+ProtectVersion=%A
+Verify=yes
+
+[Source]
+Type=url-file
+Path=https://download.opensuse.org/repositories/home:/thefutureisprivate/fedora_44_images/
+MatchPattern=%M_@v_%a.usr-%a.@u.raw.zst
+
+[Target]
+Type=partition
+Path=auto
+MatchPattern=%M_@v
+MatchPartitionType=usr
+PartitionFlags=0
+ReadOnly=1

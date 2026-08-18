@@ -1,0 +1,12 @@
+<package name="runsc" project="home:thefutureisprivate">
+  <title>gVisor runsc</title>
+  <description>Release-pinned official gVisor OCI runtime binaries for ParticleOS.</description>
+  <build>
+    <disable/>
+    <enable repository="particleos_base_Fedora_44" arch="x86_64"/>
+  </build>
+  <publish>
+    <disable/>
+    <enable repository="particleos_base_Fedora_44" arch="x86_64"/>
+  </publish>
+</package>

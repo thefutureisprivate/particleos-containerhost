@@ -1,52 +1,105 @@
-#!/bin/bash
+#!/usr/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
-set -e
+set -euo pipefail
 
-if command -v authselect >/dev/null; then
-    authselect select local
-    authselect enable-feature with-systemd-homed
+authselect select minimal --force
+usermod --password '!' root
+
+# Rootless Podman is intentionally unsupported. Keep the namespace capacity
+# that privileged runsc needs, but remove subordinate-ID delegation entirely.
+install --owner=root --group=root --mode=0600 /dev/null /etc/subuid
+install --owner=root --group=root --mode=0600 /dev/null /etc/subgid
+
+for current_systemd_unit in \
+    systemd-sysupdate-update.service \
+    systemd-sysupdate-update.timer \
+    systemd-sysupdate-reboot.service \
+    systemd-sysupdate-reboot.timer; do
+    [[ -f "/usr/lib/systemd/system/$current_systemd_unit" ]]
+done
+
+podman --version
+runsc_version=$(runsc --version)
+grep -Fq 'runsc version release-20260810.0' <<<"$runsc_version"
+
+# systemd-pull verifies OBS update metadata with this exclusive project key.
+gpg --batch --yes --dearmor \
+    --output /usr/lib/systemd/import-pubring.pgp \
+    /usr/lib/particleos/build-resources/particleos-obs-pubkey.gpg
+chmod 0644 /usr/lib/systemd/import-pubring.pgp
+
+# The runtime preload is restored after SELinux compilation. Policy tooling is
+# memory intensive and must use Fedora's allocator during the image build.
+preload=/etc/ld.so.preload
+preload_backup=/etc/ld.so.preload.particleos-build
+restore_preload() {
+    if [[ -f $preload_backup ]]; then
+        mv -- "$preload_backup" "$preload"
+    fi
+}
+trap restore_preload EXIT
+if [[ -f $preload ]]; then
+    mv -- "$preload" "$preload_backup"
 fi
+
+if ! grep -qx 'handle-unknown=deny' /etc/selinux/semanage.conf; then
+    printf '\n# ParticleOS fails closed on permissions unknown to policy.\nhandle-unknown=deny\n' \
+        >>/etc/selinux/semanage.conf
+fi
+setsebool -P deny_ptrace=on
+semodule -X 300 -i \
+    /usr/lib/particleos/selinux/particleos-containerhost.cil
+
+selinux_local_contexts=/etc/selinux/targeted/contexts/files/file_contexts.local
+for local_context in \
+    '/etc/selinux -l system_u:object_r:etc_t:s0' \
+    '/usr/libexec/gvisor(/.*)? -- system_u:object_r:container_runtime_exec_t:s0'; do
+    if ! grep -Fqx "$local_context" "$selinux_local_contexts"; then
+        printf '%s\n' "$local_context" >>"$selinux_local_contexts"
+    fi
+done
+
+restore_preload
+trap - EXIT
 
 if [[ -d /etc/pam.d ]]; then
-    find /etc/pam.d -mindepth 1 -exec mv {} /usr/lib/pam.d \;
+    find /etc/pam.d -mindepth 1 -exec mv -- {} /usr/lib/pam.d/ \;
     rmdir /etc/pam.d
 fi
+find /usr/lib/pam.d -mindepth 1 -type f -exec sed --in-place \
+    -e '/pam_shells\.so/d' \
+    -e '/pam_securetty\.so/d' \
+    -e '/pam_systemd_loadkey\.so/d' {} \;
 
-# Get rid of obsolete stuff in the pam stack.
-find /usr/lib/pam.d/ -mindepth 1 -exec sed --in-place '/pam_shells.so/d' {} \;
-find /usr/lib/pam.d/ -mindepth 1 -exec sed --in-place '/pam_securetty.so/d' {} \;
+ln --symbolic --force multi-user.target /usr/lib/systemd/system/default.target
+install --directory --owner=root --group=root --mode=0700 /var/lib/containers
 
-# Fedora disables the userdb ssh dropin by default, but helpfully leaves it available in
-# the package so that we can just symlink it to a name that will be picked up by systemd-tmpfiles.
-if [[ -f /usr/lib/tmpfiles.d/20-systemd-userdb.conf.example ]]; then
-    ln --symbolic 20-systemd-userdb.conf.example /usr/lib/tmpfiles.d/20-systemd-userdb.conf
-fi
+# Podman is an administrative, rootful-only interface. runsc remains 0755
+# because it deliberately re-executes its sandbox sidecars without privilege.
+chmod 0750 /usr/bin/podman
+chmod 0755 /usr/libexec/gvisor/runsc /usr/libexec/gvisor/gvisor-bin/*
 
-# Give ParticleOS its own identity/branding via os-release +
-# issue. Note that we keep the original $ID, $VERSION and $VERSION_ID
-# in place, so that we appear like the original underlying OS in most
-# programmatic ways. However, all "pretty"/"fancy" strings now claim
-# we are ParticleOS. Moreover, use $ID_LIKE to identify ParticleOs as
-# such in a programmatic way.
 (
+    # shellcheck source=/dev/null
     . /usr/lib/os-release
     cat >/usr/lib/os-release <<EOF
-NAME="ParticleOS ($NAME Flavour)"
+NAME="ParticleOS Container Host (Fedora Flavour)"
 ID="$ID"
-ID_LIKE="particleos-$ID"
-PRETTY_NAME="ParticleOS/$NAME $VERSION"
-FANCY_NAME="\033[0;38:2:252:186:3;1;49m⸭\033[0;38:2:252:186:3;49m ParticleOS/$NAME Flavour $VERSION\033[0m"
+ID_LIKE="particleos-containerhost $ID"
+PRETTY_NAME="ParticleOS Container Host/$NAME $VERSION"
+FANCY_NAME="ParticleOS Container Host/$NAME $VERSION"
 VERSION="$VERSION"
 VERSION_ID="$VERSION_ID"
 ANSI_COLOR="38:2:252:186:3;1;49"
-ANSI_COLOR_REVERSE="48;2;252;186;3;1;30"
-DEFAULT_HOSTNAME="particle-????-????"
-HOME_URL="https://github.com/systemd/particleos/"
+ANSI_COLOR_REVERSE="48;2;252:186:3;1;30"
+DEFAULT_HOSTNAME="particle-host-????-????"
+HOME_URL="https://github.com/thefutureisprivate/particleos-containerhost"
+DOCUMENTATION_URL="https://github.com/thefutureisprivate/particleos-containerhost/tree/main/docs"
 EOF
 
     cat >/usr/lib/issue <<EOF
-\e[0;38:2:252:186:3;1;49m▒\e[0m \e[0;38:2:252:186:3;1;49m⸭\e[0;38:2:252:186:3;49m ParticleOS/$NAME Flavour $VERSION\e[0m
-\e[0;38:2:252:186:3;1;49m▒\e[0m Kernel \r on an \m (\l)
+ParticleOS Container Host/$NAME $VERSION
+Kernel \r on an \m (\l)
 
 EOF
 )

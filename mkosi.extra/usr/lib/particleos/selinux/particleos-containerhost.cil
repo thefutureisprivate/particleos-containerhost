@@ -1,0 +1,75 @@
+; SPDX-License-Identifier: LGPL-2.1-or-later
+
+; Permit user namespaces only to trusted boot/update helpers and gVisor's
+; confined rootful runtime. Login users and arbitrary services are denied even
+; though a small global namespace quota remains available to those helpers.
+(block particleos_containerhost
+  (typeattribute userns_privileged_domain)
+  (typeattributeset userns_privileged_domain
+    (.init_t .kernel_t .systemd_importd_t .container_runtime_t))
+
+  (typeattribute userns_restricted_domain)
+  (typeattributeset userns_restricted_domain
+    (and (.domain) (not (userns_privileged_domain))))
+  (deny userns_restricted_domain self (user_namespace (create)))
+
+  ; The authenticated /usr partition is mounted nosuid. Preserve only the
+  ; existing Fedora daemon and login transitions required by this host.
+  (allow .init_t .udev_t (process2 (nosuid_transition)))
+  (allow .init_t .system_dbusd_t (process2 (nosuid_transition)))
+  (allow .init_t .ldconfig_t (process2 (nosuid_transition)))
+  (allow .init_t .setfiles_t (process2 (nosuid_transition)))
+  (allow .init_t .iptables_t (process2 (nosuid_transition)))
+  (allow .init_t .sshd_keygen_t (process2 (nosuid_transition)))
+  (allow .init_t .chronyd_t (process2 (nosuid_transition)))
+  (allow .init_t .bootloader_t (process2 (nosuid_transition)))
+  (allow .init_t .container_runtime_t (process2 (nosuid_transition)))
+  (allow .udev_t .systemd_sysctl_t (process2 (nosuid_transition)))
+  (allow .udev_t .lvm_t (process2 (nosuid_transition)))
+  (allow .sshd_keygen_t .ssh_keygen_t (process2 (nosuid_transition)))
+  (allow .sshd_keygen_t .setfiles_t (process2 (nosuid_transition)))
+  (allow .getty_t .local_login_t (process2 (nosuid_transition)))
+  (allow .init_t .unconfined_t (process2 (nosuid_transition)))
+  (allow .local_login_t .unconfined_t (process2 (nosuid_transition)))
+  (allow .sshd_t .sshd_session_t (process2 (nosuid_transition)))
+  (allow .sshd_session_t .sshd_auth_t (process2 (nosuid_transition)))
+  (allow .sshd_session_t .unconfined_t (process2 (nosuid_transition)))
+  (allow .unconfined_t .container_runtime_t (process2 (nosuid_transition)))
+  (allow .unconfined_t .chronyc_t (process2 (nosuid_transition)))
+  (allow .policykit_auth_t .chkpwd_t (process2 (nosuid_transition)))
+  (allow .init_t .chkpwd_t (process2 (nosuid_transition)))
+
+  ; Host workloads have no reason to use these kernel protocol families.
+  ; Protocols implemented inside gVisor remain available to a guest without
+  ; exposing the corresponding host-kernel attack surface.
+  (typeattribute userspace_domain)
+  (typeattributeset userspace_domain (and (.domain) (not (.kernel_t))))
+  (typeattribute all_object_types)
+  (typeattributeset all_object_types (all))
+  (deny userspace_domain all_object_types (alg_socket (all)))
+  (deny userspace_domain all_object_types (key_socket (all)))
+  (deny userspace_domain all_object_types (netlink_xfrm_socket (all)))
+  (deny userspace_domain all_object_types (appletalk_socket (all)))
+  (deny userspace_domain all_object_types (atmpvc_socket (all)))
+  (deny userspace_domain all_object_types (atmsvc_socket (all)))
+  (deny userspace_domain all_object_types (ax25_socket (all)))
+  (deny userspace_domain all_object_types (caif_socket (all)))
+  (deny userspace_domain all_object_types (can_socket (all)))
+  (deny userspace_domain all_object_types (dccp_socket (all)))
+  (deny userspace_domain all_object_types (decnet_socket (all)))
+  (deny userspace_domain all_object_types (ieee802154_socket (all)))
+  (deny userspace_domain all_object_types (ipx_socket (all)))
+  (deny userspace_domain all_object_types (irda_socket (all)))
+  (deny userspace_domain all_object_types (isdn_socket (all)))
+  (deny userspace_domain all_object_types (iucv_socket (all)))
+  (deny userspace_domain all_object_types (kcm_socket (all)))
+  (deny userspace_domain all_object_types (llc_socket (all)))
+  (deny userspace_domain all_object_types (netrom_socket (all)))
+  (deny userspace_domain all_object_types (pppox_socket (all)))
+  (deny userspace_domain all_object_types (rds_socket (all)))
+  (deny userspace_domain all_object_types (rose_socket (all)))
+  (deny userspace_domain all_object_types (rxrpc_socket (all)))
+  (deny userspace_domain all_object_types (sctp_socket (all)))
+  (deny userspace_domain all_object_types (smc_socket (all)))
+  (deny userspace_domain all_object_types (tipc_socket (all)))
+  (deny userspace_domain all_object_types (x25_socket (all))))

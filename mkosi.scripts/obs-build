@@ -1,0 +1,98 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+resource_dir="$(/usr/bin/python3 -c '
+from pathlib import Path
+import mkosi.resources
+print(Path(mkosi.resources.__file__).parent / "mkosi-obs")
+')"
+upstream_helper="$resource_dir/mkosi.build"
+sources=/usr/src/packages/SOURCES
+output=/work/src/usr/src/packages/OTHER
+
+[[ -x "$upstream_helper" ]] || {
+    echo "Upstream mkosi-obs build helper is unavailable" >&2
+    exit 1
+}
+
+if [[ ! -f "$sources/hashes.cpio.rsasign.sig" ]]; then
+    exec "$upstream_helper" "$@"
+fi
+
+scratch="$(mktemp -d /tmp/particleos-obs-sign.XXXXXX)"
+trap 'rm -rf -- "$scratch"' EXIT
+staged="$scratch/SOURCES"
+mkdir "$staged"
+for source in "$sources"/*; do
+    ln -s -- "$source" "$staged/${source##*/}"
+done
+
+shopt -s nullglob
+roothashes=("$sources"/ParticleOS-Host_*.roothash)
+[[ ${#roothashes[@]} -eq 1 ]] || {
+    echo "Expected one ParticleOS host roothash, found ${#roothashes[@]}" >&2
+    exit 1
+}
+
+prefix="${roothashes[0]%.roothash}"
+os_release="$prefix.osrelease"
+repart_archive="$prefix.repart.tar"
+[[ -f "$os_release" && -f "$repart_archive" ]]
+
+read_release_field() {
+    local key=$1 value
+    value="$(sed -n "s/^${key}=//p" "$os_release" | head -n1)"
+    value="${value%\"}"
+    value="${value#\"}"
+    [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+    printf '%s' "$value"
+}
+
+image_id="$(read_release_field IMAGE_ID)"
+image_version="$(read_release_field IMAGE_VERSION)"
+label="${image_id}_${image_version}_vsig"
+[[ ${#label} -le 36 ]] || {
+    echo "GPT label exceeds 36 characters: $label" >&2
+    exit 1
+}
+
+definitions="$scratch/repart"
+mkdir "$definitions"
+tar -xf "$repart_archive" -C "$definitions"
+mapfile -t signature_definitions < <(
+    grep -rl '^Type=usr-verity-sig$' "$definitions" --include='*.conf'
+)
+[[ ${#signature_definitions[@]} -eq 1 ]] || {
+    echo "Expected one usr-verity-sig definition" >&2
+    exit 1
+}
+sed -i "s/^Label=.*/Label=$label/" "${signature_definitions[0]}"
+grep -qxF "Label=$label" "${signature_definitions[0]}"
+
+staged_archive="$staged/${repart_archive##*/}"
+rm -- "$staged_archive"
+mapfile -t definition_names < <(
+    find "$definitions" -maxdepth 1 -type f -name '*.conf' -printf '%f\n' | sort
+)
+tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+    --owner=0 --group=0 --numeric-owner \
+    -cf "$staged_archive" -C "$definitions" "${definition_names[@]}"
+
+patched_helper="$scratch/mkosi.build"
+sed -e "s#^cp -r $sources/#cp -rL $staged/#" \
+    -e "s#$sources#$staged#g" \
+    "$upstream_helper" >"$patched_helper"
+grep -qF "cp -rL $staged/" "$patched_helper"
+chmod 0755 "$patched_helper"
+"$patched_helper" "$@"
+
+install -m0644 "$staged_archive" "$output/${repart_archive##*/}"
+for suffix in manifest.gz osrelease; do
+    artifact="$prefix.$suffix"
+    [[ -f "$artifact" ]] || {
+        echo "Missing release metadata: $artifact" >&2
+        exit 1
+    }
+    install -m0644 "$artifact" "$output/${artifact##*/}"
+done

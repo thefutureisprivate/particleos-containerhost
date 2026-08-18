@@ -1,0 +1,24 @@
+<services>
+  <service name="download_url">
+    <param name="protocol">https</param>
+    <param name="host">storage.googleapis.com</param>
+    <param name="path">gvisor/releases/release/20260810.0/x86_64/gvisor.tar.bz2</param>
+    <param name="filename">gvisor.tar.bz2</param>
+  </service>
+  <service name="verify_file">
+    <param name="file">_service:download_url:gvisor.tar.bz2</param>
+    <param name="verifier">sha512</param>
+    <param name="checksum">3de91138cda15682c11807387f6ecad9e7c8932262018a2813277e1b4efa03efe33b0a948e148c6b1ccfe7345bfab5d5e0d072519505465751273898bae19c62</param>
+  </service>
+  <service name="download_url">
+    <param name="protocol">https</param>
+    <param name="host">raw.githubusercontent.com</param>
+    <param name="path">google/gvisor/release-20260810.0/LICENSE</param>
+    <param name="filename">LICENSE.gvisor</param>
+  </service>
+  <service name="verify_file">
+    <param name="file">_service:download_url:LICENSE.gvisor</param>
+    <param name="verifier">sha256</param>
+    <param name="checksum">0fbab5c58efbdf6d31e8085214f2dd821659c03d73cff3ed2b08e98826ea1cd9</param>
+  </service>
+</services>

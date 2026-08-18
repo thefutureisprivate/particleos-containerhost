@@ -1,0 +1,12 @@
+<package name="particleos-containerhost" project="home:thefutureisprivate">
+  <title>ParticleOS Container Host</title>
+  <description>Generic hardened Fedora container host based directly on upstream ParticleOS.</description>
+  <build>
+    <disable/>
+    <enable repository="fedora_44_images" arch="x86_64"/>
+  </build>
+  <publish>
+    <disable/>
+    <enable repository="fedora_44_images" arch="x86_64"/>
+  </publish>
+</package>

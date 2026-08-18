@@ -1,0 +1,10 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+source_certificate=/usr/src/packages/SOURCES/_projectcert.crt
+destination="$BUILDROOT/usr/lib/verity.d/particleos-obs-project.crt"
+
+[[ -f "$source_certificate" ]] || exit 0
+openssl x509 -in "$source_certificate" -noout >/dev/null
+install -D --mode=0644 "$source_certificate" "$destination"

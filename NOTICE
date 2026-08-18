@@ -1,0 +1,6 @@
+ParticleOS Container Host is derived from systemd/particleos and is distributed
+under LGPL-2.1-or-later. See LICENSE.
+
+The separately built runsc RPM redistributes official gVisor release binaries
+under Apache-2.0. Its source archive, checksum, and license are pinned in
+.obs/runsc; the installed RPM carries the upstream license text.

@@ -1,9 +1,97 @@
-#!/bin/bash
+#!/usr/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
-set -e
+set -euo pipefail
 
-# Capture the entirety of /etc in /usr/share/factory/etc so we can use
-# systemd-tmpfiles to symlink individual directories from it to /etc.
-mkdir -p "$BUILDROOT/usr/share/factory/"
-cp --archive --no-target-directory --update=none "$BUILDROOT/etc" "$BUILDROOT/usr/share/factory/etc"
+# Static activation paths that are outside preset control are removed here.
+for unit in \
+    systemd-coredump.socket \
+    systemd-coredump@.service \
+    systemd-binfmt.service \
+    proc-sys-fs-binfmt_misc.automount \
+    proc-sys-fs-binfmt_misc.mount \
+    sshd-keygen.target; do
+    ln --symbolic --force /dev/null "$BUILDROOT/usr/lib/systemd/system/$unit"
+done
+
+for user_unit in \
+    podman.service \
+    podman.socket \
+    podman-auto-update.service \
+    podman-auto-update.timer \
+    podman-restart.service; do
+    ln --symbolic --force /dev/null "$BUILDROOT/usr/lib/systemd/user/$user_unit"
+done
+
+# Fedora's dedicated bootloader domain may update the boot-counted UKI name.
+chroot "$BUILDROOT" /usr/bin/chcon \
+    system_u:object_r:bootloader_exec_t:s0 \
+    /usr/lib/systemd/systemd-bless-boot
+
+grep -Fqx "IMAGE_ID=\"$IMAGE_ID\"" "$BUILDROOT/usr/lib/os-release"
+if [[ -n ${IMAGE_VERSION:-} ]]; then
+    grep -Fqx "IMAGE_VERSION=\"$IMAGE_VERSION\"" "$BUILDROOT/usr/lib/os-release"
+fi
+
+# Strip every executable set-ID bit, then restore only PAM's audited shadow
+# helper. /usr is verity authenticated; writable state is mounted nosuid.
+for image_tree in \
+    "$BUILDROOT/etc" \
+    "$BUILDROOT/opt" \
+    "$BUILDROOT/usr" \
+    "$BUILDROOT/var"; do
+    [[ -d $image_tree ]] || continue
+    find "$image_tree" -xdev -type f -perm /6000 -perm /0111 \
+        -exec chmod a-s -- {} +
+done
+
+pam_shadow_helper="$BUILDROOT/usr/bin/unix_chkpwd"
+[[ -x $pam_shadow_helper ]]
+chmod 4755 "$pam_shadow_helper"
+
+mapfile -t remaining_setid < <(
+    for image_tree in \
+        "$BUILDROOT/etc" \
+        "$BUILDROOT/opt" \
+        "$BUILDROOT/usr" \
+        "$BUILDROOT/var"; do
+        [[ -d $image_tree ]] || continue
+        find "$image_tree" -xdev -type f -perm /6000 -perm /0111 -print
+    done
+)
+if ((${#remaining_setid[@]} != 1)) || [[ ${remaining_setid[0]:-} != "$pam_shadow_helper" ]]; then
+    printf 'unexpected set-ID executable after finalization: %s\n' \
+        "${remaining_setid[@]:-none}" >&2
+    exit 1
+fi
+
+[[ -x "$BUILDROOT/usr/bin/podman" ]]
+chmod 0750 "$BUILDROOT/usr/bin/podman"
+[[ -x "$BUILDROOT/usr/libexec/gvisor/runsc" ]]
+chmod 0755 "$BUILDROOT/usr/libexec/gvisor/runsc"
+
+# Capture immutable vendor configuration and construct the initial encrypted
+# root skeleton copied by systemd-repart on first boot.
+mkdir -p "$BUILDROOT/usr/share/factory"
+cp --archive --no-target-directory --update=none \
+    "$BUILDROOT/etc" "$BUILDROOT/usr/share/factory/etc"
 ln -sr "$BUILDROOT/usr" "$BUILDROOT/usr/share/factory/usr"
+
+root_skeleton="$BUILDROOT/usr/share/factory/root"
+install -d -m 0755 \
+    "$root_skeleton/etc" \
+    "$root_skeleton/home" \
+    "$root_skeleton/root" \
+    "$root_skeleton/var/lib/containers" \
+    "$root_skeleton/var/log/journal"
+chmod 0700 "$root_skeleton/root" "$root_skeleton/var/lib/containers"
+ln -sfn usr/bin "$root_skeleton/bin"
+ln -sfn usr/lib "$root_skeleton/lib"
+ln -sfn usr/lib64 "$root_skeleton/lib64"
+ln -sfn usr/sbin "$root_skeleton/sbin"
+ln -sfn /usr/share/factory/etc/selinux "$root_skeleton/etc/selinux"
+chroot "$BUILDROOT" /usr/sbin/setfiles -F \
+    -r /usr/share/factory/root \
+    /etc/selinux/targeted/contexts/files/file_contexts \
+    /usr/share/factory/root
+chroot "$BUILDROOT" /usr/bin/chcon -h system_u:object_r:etc_t:s0 \
+    /usr/share/factory/root/etc/selinux

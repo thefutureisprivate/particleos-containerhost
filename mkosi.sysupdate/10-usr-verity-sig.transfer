@@ -12,7 +12,7 @@ MatchPattern=%M_@v_%a.usr-%a-verity-sig.@u.raw
 [Target]
 Type=partition
 Path=auto
-MatchPattern=%M_@v_verity_sig
+MatchPattern=%M_@v_vsig
 MatchPartitionType=usr-verity-sig
 PartitionFlags=0
 ReadOnly=1

@@ -1,0 +1,9 @@
+<services>
+  <service name="obs_scm">
+    <param name="url">https://github.com/thefutureisprivate/particleos-containerhost.git</param>
+    <param name="scm">git</param>
+    <param name="revision">REPLACE_WITH_SIGNED_COMMIT</param>
+    <param name="extract">.obs/particleos-containerhost/x86-64/mkosi.conf</param>
+    <param name="without-version">1</param>
+  </service>
+</services>

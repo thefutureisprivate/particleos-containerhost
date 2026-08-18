@@ -1,0 +1,29 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+resource_dir="$(/usr/bin/python3 -c '
+from pathlib import Path
+import mkosi.resources
+print(Path(mkosi.resources.__file__).parent / "mkosi-obs")
+')"
+upstream_helper="$resource_dir/mkosi.postoutput"
+build_wrapper=/usr/src/packages/SOURCES/particleos-containerhost/mkosi.scripts/obs-build
+
+[[ -x "$upstream_helper" ]] || {
+    echo "Upstream mkosi-obs post-output helper is unavailable" >&2
+    exit 1
+}
+[[ -x "$build_wrapper" ]] || {
+    echo "Container-host OBS build wrapper is unavailable" >&2
+    exit 1
+}
+
+"$upstream_helper" "$@"
+install -m0755 "$build_wrapper" "$OUTPUTDIR/particleos-containerhost-obs-build"
+cat >>"$OUTPUTDIR/mkosi.conf" <<'EOF'
+
+[Content]
+BuildScripts=
+BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-obs-build
+EOF
