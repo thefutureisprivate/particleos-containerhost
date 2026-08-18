@@ -96,3 +96,20 @@ for suffix in manifest.gz osrelease; do
     }
     install -m0644 "$artifact" "$output/${artifact##*/}"
 done
+
+# PCR policy signing requires one additional OBS signing round after the
+# verity/bootloader round. Carry this wrapper and its BuildScripts directive
+# forward whenever upstream staged another hash archive.
+if [[ -f "$output/hashes.cpio.rsasign" ]]; then
+    install -m0755 "$0" "$output/particleos-containerhost-obs-build"
+    if ! grep -qF \
+        'BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-obs-build' \
+        "$output/mkosi.conf"; then
+        cat >>"$output/mkosi.conf" <<'EOF'
+
+[Content]
+BuildScripts=
+BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-obs-build
+EOF
+    fi
+fi
