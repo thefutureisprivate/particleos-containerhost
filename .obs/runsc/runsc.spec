@@ -5,8 +5,8 @@ Release:        0
 Summary:        gVisor OCI sandbox runtime
 License:        Apache-2.0
 URL:            https://gvisor.dev/
-Source0:        _service:download_url:gvisor.tar.bz2
-Source1:        _service:download_url:LICENSE.gvisor
+Source0:        gvisor.tar.bz2
+Source1:        LICENSE.gvisor
 ExclusiveArch:  x86_64
 
 %description
