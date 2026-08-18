@@ -79,6 +79,7 @@ require_fixed 'kernel.unprivileged_userns_clone = 0' mkosi.extra/usr/lib/sysctl.
 require_fixed '(deny userns_restricted_domain self (user_namespace (create)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'SELinux denies user namespaces by default'
 require_fixed '.container_runtime_t' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'gVisor runtime domain has the narrow namespace exception'
 require_fixed 'SELINUX=enforcing' mkosi.extra/etc/selinux/config 'SELinux is enforcing in userspace'
+require_fixed 'authselect select local --force' mkosi.postinst.chroot 'Fedora local authentication profile is explicit'
 
 # Literal implementation strings, not expressions for this validator.
 # shellcheck disable=SC2016
