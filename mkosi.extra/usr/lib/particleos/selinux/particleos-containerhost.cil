@@ -57,6 +57,9 @@
             .container_runtime_t .gvisor_t))))
   (deny userns_restricted_domain self (user_namespace (create)))
   (allow .gvisor_t self (user_namespace (create)))
+  ; runsc normalizes the ownership of inherited service stdio before entering
+  ; its user namespace. Quadlet services inherit /dev/null for stdin.
+  (allow .gvisor_t .null_device_t (chr_file (setattr)))
 
   ; The authenticated /usr partition is mounted nosuid. Preserve only the
   ; existing Fedora daemon and login transitions required by this host.
