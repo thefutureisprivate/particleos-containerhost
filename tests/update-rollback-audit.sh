@@ -105,7 +105,7 @@ initial)
     write_state "$stage_file" staged
     sync
     echo "UPDATE_ROLLBACK_AUDIT_STAGED base=$base_version candidate=$candidate_version variants=${#component_files[@]}"
-    systemctl start systemd-sysupdate-reboot.service
+    systemctl start systemd-sysupdate-reboot.service || true
     sleep 30
     echo 'UPDATE_ROLLBACK_AUDIT_REBOOT_FAILED'
     exit 1

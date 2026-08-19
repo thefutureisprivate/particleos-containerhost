@@ -244,7 +244,7 @@ run_guest() {
             echo "$scenario boot $boot_number did not power off or reboot cleanly" >&2
             return 1
         fi
-        if grep -q '^UPDATE_ROLLBACK_AUDIT_FAIL ' "$log"; then
+        if grep -q 'UPDATE_ROLLBACK_AUDIT_FAIL ' "$log"; then
             tail -240 "$log" >&2 || true
             echo "$scenario boot $boot_number failed a guest-side audit assertion" >&2
             return 1
@@ -255,7 +255,7 @@ run_guest() {
             echo "superseded UKI unexpectedly completed boot with status $status" >&2
             return 1
         fi
-        if grep -q '^UPDATE_ROLLBACK_AUDIT_BYPASS ' "$log"; then
+        if grep -q 'UPDATE_ROLLBACK_AUDIT_BYPASS ' "$log"; then
             tail -240 "$log" >&2 || true
             echo 'superseded UKI bypassed the TPM rollback boundary' >&2
             return 1
@@ -271,10 +271,10 @@ run_guest() {
 echo "Testing blessed-candidate revocation: $base_version -> $candidate_version"
 prepare_scenario rollback-denial
 run_guest rollback-denial 1 clean
-grep '^UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
+grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 denial_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
 run_guest rollback-denial 2 clean
-grep '^UPDATE_ROLLBACK_AUDIT_CANDIDATE_BLESSED ' "$active_state/boot-2.log"
+grep 'UPDATE_ROLLBACK_AUDIT_CANDIDATE_BLESSED ' "$active_state/boot-2.log"
 denial_candidate_usrhash=$(extract_usrhash "$active_state/boot-2.log")
 [[ $denial_candidate_usrhash != "$denial_base_usrhash" ]]
 run_guest rollback-denial 3 denied
@@ -285,15 +285,15 @@ echo 'UPDATE_ROLLBACK_AUDIT_DENIAL_PASS superseded signed UKI could not unlock p
 echo "Testing health-triggered A/B fallback: $candidate_version -> $base_version"
 prepare_scenario health-fallback
 run_guest health-fallback 1 clean
-grep '^UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
+grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 fallback_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
 for boot_number in 2 3 4; do
     run_guest health-fallback "$boot_number" clean
-    grep '^UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT ' "$active_state/boot-$boot_number.log"
+    grep 'UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT ' "$active_state/boot-$boot_number.log"
     [[ $(extract_usrhash "$active_state/boot-$boot_number.log") != "$fallback_base_usrhash" ]]
 done
 run_guest health-fallback 5 clean
-grep '^UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-5.log"
+grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-5.log"
 [[ $(extract_usrhash "$active_state/boot-5.log") == "$fallback_base_usrhash" ]]
 
 echo 'ParticleOS A/B update, health fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'
