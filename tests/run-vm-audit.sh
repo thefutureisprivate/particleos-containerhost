@@ -154,7 +154,7 @@ run_boot() {
             -serial "file:$log" \
             -monitor none \
             -no-reboot \
-            -smbios type=11,value=io.systemd.stub.kernel-cmdline-extra=systemd.wants=vm-audit.service \
+            -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.wants=vm-audit.service systemd.mask=serial-getty@ttyS0.service' \
             -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.vm-audit.service=$audit_service" \
             -smbios "type=11,value=io.systemd.credential.binary:vm-audit=$audit_script"; then
         qemu_active=0

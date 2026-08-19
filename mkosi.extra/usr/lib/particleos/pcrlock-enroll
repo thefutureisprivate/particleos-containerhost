@@ -17,7 +17,7 @@ marker=/var/lib/particleos/pcrlock-enrolled
 
 metadata=$(cryptsetup luksDump --dump-json-metadata "$state")
 compact=${metadata//[[:space:]]/}
-[[ $compact == *'"tpm2-pcrlock":true'* ]]
+[[ $compact == *'"tpm2_pcrlock":true'* ]]
 [[ $compact != *'"tpm2-pcrs":[7]'* ]]
 install -d -m 0700 /var/lib/particleos
 install -m 0600 /dev/null "$marker"

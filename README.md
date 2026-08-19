@@ -402,7 +402,7 @@ empty workload-forwarding sets, default-drop firewall chains, and
 `kernel.modules_disabled = 1`.
 
 Inspect the state token's JSON metadata before relying on automatic unlock. It
-must contain `"tpm2-pcrlock": true`, must not retain a PCR7-only token, and
+must contain `"tpm2_pcrlock": true`, must not retain a PCR7-only token, and
 `/var/lib/systemd/pcrlock.json` must contain both PCR 7 and PCR 11. Device names
 vary; resolve them with
 `systemd-repart --json=pretty /dev/<disk>` before enrollment operations.

@@ -106,7 +106,7 @@ state=/dev/disk/by-partlabel/ParticleOS-Host-root
 if [[ -b $state ]]; then pass 'persistent state partition exists'; else fail 'persistent state partition exists'; fi
 luks_metadata=$(cryptsetup luksDump --dump-json-metadata "$state" 2>/dev/null || true)
 luks_metadata_compact=$(tr -d '[:space:]' <<<"$luks_metadata")
-if grep -qF '"tpm2-pcrlock":true' <<<"$luks_metadata_compact" &&
+if grep -qF '"tpm2_pcrlock":true' <<<"$luks_metadata_compact" &&
         ! grep -qF '"tpm2-pcrs":[7]' <<<"$luks_metadata_compact"; then
     pass 'the PCR7 bootstrap token was replaced by an NV pcrlock token'
 else
@@ -256,6 +256,10 @@ if ! setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
         "$runsc" --version >/dev/null 2>&1; then
     pass 'an unprivileged account cannot execute runsc directly'
 else
+    stat -c 'runsc mode=%a owner=%U group=%G' "$runsc" 2>/dev/null || true
+    setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+        --reuid=nobody --regid=nobody --clear-groups \
+        id 2>/dev/null || true
     fail 'an unprivileged account cannot execute runsc directly'
 fi
 
