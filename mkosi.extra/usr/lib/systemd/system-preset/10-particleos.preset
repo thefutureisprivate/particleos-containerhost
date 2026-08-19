@@ -22,6 +22,7 @@ enable preset-global.service
 enable systemd-oomd.service
 enable systemd-sysupdate-update.timer
 enable systemd-sysupdate-reboot.timer
+enable systemd-bless-boot.service
 enable systemd-boot-check-no-failures.service
 enable particleos-pcrlock-enroll.service
 enable particleos-workload-health.service

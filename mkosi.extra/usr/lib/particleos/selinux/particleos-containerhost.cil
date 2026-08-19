@@ -41,7 +41,7 @@
 
   (typeattribute anonymous_exec_restricted_domain)
   (typeattributeset anonymous_exec_restricted_domain
-    (and (.domain) (not (anonymous_exec_privileged_domain))))
+    (and (.domain) (not (.gvisor_t))))
   (deny anonymous_exec_restricted_domain self (process (execmem execstack)))
   (deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t
     (file (entrypoint execute execute_no_trans)))
@@ -50,13 +50,11 @@
   ; ptrace operation to initialize executor children, so grant only that edge.
   (allow .gvisor_t self (process (ptrace)))
 
-  (typeattribute userns_privileged_domain)
-  (typeattributeset userns_privileged_domain
-    (.init_t .kernel_t .systemd_importd_t .gvisor_t))
-
   (typeattribute userns_restricted_domain)
   (typeattributeset userns_restricted_domain
-    (and (.domain) (not (userns_privileged_domain))))
+    (and (.domain)
+      (not (.init_t .kernel_t .systemd_importd_t
+            .container_runtime_t .gvisor_t))))
   (deny userns_restricted_domain self (user_namespace (create)))
 
   ; The authenticated /usr partition is mounted nosuid. Preserve only the
@@ -73,6 +71,12 @@
   ; Root-owned system services may launch Podman or runsc directly. Keep this
   ; limited to the dedicated container-runtime domain on authenticated /usr.
   (allow .initrc_t .container_runtime_t (process2 (nosuid_transition)))
+  (allow .initrc_t .lvm_t (process2 (nosuid_transition)))
+  (allow .initrc_t .systemd_importd_t (process2 (nosuid_transition)))
+  (allow .initrc_t .iptables_t (process2 (nosuid_transition)))
+  (allow .initrc_t .fsadm_t (process2 (nosuid_transition)))
+  (allow .initrc_t .mount_t (process2 (nosuid_transition)))
+  (allow .container_runtime_t .iptables_t (process2 (nosuid_transition)))
   (allow .udev_t .systemd_sysctl_t (process2 (nosuid_transition)))
   (allow .udev_t .lvm_t (process2 (nosuid_transition)))
   (allow .sshd_keygen_t .ssh_keygen_t (process2 (nosuid_transition)))

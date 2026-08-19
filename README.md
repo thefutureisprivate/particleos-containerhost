@@ -123,7 +123,7 @@ firewall; `kernel.modules_disabled=1` then prevents any later module load.
 SELinux additionally:
 
 - denies user-namespace creation to every domain except trusted boot/update
-  helpers and `gvisor_t`;
+  helpers and the administrative Podman/gVisor runtime domains;
 - denies unused host socket families while leaving protocols implemented
   inside gVisor available to workloads;
 - limits `nosuid_transition` exceptions to the Fedora services the immutable
@@ -157,9 +157,11 @@ Rootful Podman is the sole workload interface. It invokes
 `newgidmap`, Pasta, passt, slirp4netns, Podman user services, and subordinate ID
 mappings are absent. Login users cannot create user namespaces.
 
-The kernel retains a small user-namespace quota because trusted rootful gVisor
-needs namespaces internally. SELinux grants creation only to system plumbing
-and `gvisor_t`; this is not rootless-container support.
+The kernel retains a small user-namespace quota because trusted rootful Podman
+and gVisor need namespaces internally. SELinux grants creation only to system
+plumbing and their administrative runtime domains; mode `0750` entry points,
+disabled unprivileged user namespaces, and absent user services keep this from
+becoming rootless-container support.
 
 gVisor does not implement SELinux labels inside its sandbox. Per-container
 labeling is disabled. Podman remains in `container_runtime_t`; runsc and its
@@ -299,7 +301,7 @@ TPM2 state encryption | Adapt | PCR7 bootstraps one boot, then an NV-backed stri
 PCR11/pcrlock rollback control | Adapt | Machine-local TPM NV policy admits current + candidate only, then revokes the superseded UKI after blessing.
 SELinux enforcing | Retain | Fedora targeted policy plus one small host CIL module.
 Broad application SELinux policy | Drop | Mail, database, proxy, DNS, and installer domains have no host role.
-User-namespace prohibition | Adapt | Login/service and Podman domains are denied; trusted helpers and `gvisor_t` retain a quota.
+User-namespace prohibition | Adapt | Login domains are denied; trusted helpers and the administrative Podman/gVisor domains retain a quota.
 Ptrace prohibition | Adapt | Yama mode 2 and `deny_ptrace=on` remain; only `gvisor_t` self-ptrace is allowed for systrap startup.
 Socket-family restrictions | Retain | Unused host protocols are denied; gVisor implements guest protocols.
 Set-ID removal | Retain | All bits are stripped, then only `unix_chkpwd` is restored.

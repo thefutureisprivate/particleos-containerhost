@@ -240,17 +240,20 @@ else
     printf '%s\n' "${public_gvisor_binaries[@]}"
     fail 'Podman, runsc, and every gVisor sidecar are administrative-only'
 fi
-if ! setpriv --reuid=nobody --regid=nobody --clear-groups \
+if ! setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+        --reuid=nobody --regid=nobody --clear-groups \
         "$runsc" --version >/dev/null 2>&1; then
     pass 'an unprivileged account cannot execute runsc directly'
 else
     fail 'an unprivileged account cannot execute runsc directly'
 fi
 
+runsc_audit=/var/lib/containers/particleos-runsc-audit
 install -d -m 0700 \
-    /run/particleos-runsc-audit/root \
-    /run/particleos-runsc-audit/bundle \
-    /run/particleos-runsc-audit/bundle/rootfs
+    "$runsc_audit/root" \
+    "$runsc_audit/bundle" \
+    "$runsc_audit/bundle/rootfs"
+restorecon -RF "$runsc_audit"
 mapfile -t true_dependencies < <(
     ldd /usr/bin/true | sed -nE \
         -e 's@.*=> (/[^ ]+).*@\1@p' \
@@ -258,8 +261,8 @@ mapfile -t true_dependencies < <(
 )
 cp --dereference --parents -- \
     /usr/bin/true "${true_dependencies[@]}" \
-    /run/particleos-runsc-audit/bundle/rootfs
-cat >/run/particleos-runsc-audit/bundle/config.json <<'JSON'
+    "$runsc_audit/bundle/rootfs"
+cat >"$runsc_audit/bundle/config.json" <<'JSON'
 {
   "ociVersion": "1.0.2",
   "process": {
@@ -286,13 +289,14 @@ cat >/run/particleos-runsc-audit/bundle/config.json <<'JSON'
   }
 }
 JSON
-runsc_log=/run/particleos-runsc-audit/runsc.log
+restorecon -RF "$runsc_audit"
+runsc_log="$runsc_audit/runsc.log"
 if "$runsc" --debug --debug-log="$runsc_log" --platform=systrap \
-        --root=/run/particleos-runsc-audit/root run \
-        --bundle=/run/particleos-runsc-audit/bundle particleos-audit; then
+        --root="$runsc_audit/root" run \
+        --bundle="$runsc_audit/bundle" particleos-audit; then
     pass 'runsc executes an OCI bundle with systrap'
 else
-    "$runsc" --root=/run/particleos-runsc-audit/root delete --force particleos-audit 2>/dev/null || true
+    "$runsc" --root="$runsc_audit/root" delete --force particleos-audit 2>/dev/null || true
     tail -240 "$runsc_log" 2>/dev/null || true
     journalctl --boot --no-pager 2>/dev/null |
         grep -Ei 'avc:|denied|ipe|runsc|systrap' | tail -160 || true
@@ -307,7 +311,8 @@ else
 fi
 userns_clone=/proc/sys/kernel/unprivileged_userns_clone
 if { [[ ! -e $userns_clone ]] || [[ $(<"$userns_clone") == 0 ]]; } &&
-        ! setpriv --reuid=nobody --regid=nobody --clear-groups \
+        ! setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+            --reuid=nobody --regid=nobody --clear-groups \
             unshare --user true 2>/dev/null; then
     pass 'unprivileged user namespaces are disabled'
 else
