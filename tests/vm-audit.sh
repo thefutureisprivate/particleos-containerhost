@@ -183,6 +183,11 @@ if [[ $(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null) == false
 else
     fail 'Podman is rootful'
 fi
+if grep -qxF 'keyring = true' /etc/containers/containers.conf.d/10-particleos.conf; then
+    pass 'containers receive a fresh session keyring'
+else
+    fail 'containers receive a fresh session keyring'
+fi
 runsc=/usr/libexec/gvisor/runsc
 if "$runsc" --version | grep -qF 'release-20260810.0'; then pass 'the pinned gVisor release is installed'; else fail 'the pinned gVisor release is installed'; fi
 
@@ -267,6 +272,85 @@ elif grep -Eqi 'rejected by policy|source image rejected|signature policy' "$pul
 else
     sed -n '1,20p' "$pull_log"
     fail 'an unsigned OCI pull is rejected by image policy'
+fi
+
+fixture_mount=/run/particleos-container-fixture
+fixture_device=$(findfs LABEL=PTESTOCI 2>/dev/null || true)
+install -d -m 0700 "$fixture_mount"
+if [[ -b $fixture_device ]] &&
+        mount -o ro,nosuid,nodev,noexec "$fixture_device" "$fixture_mount"; then
+    pass 'the signed-container fixture is mounted read-only'
+else
+    fail 'the signed-container fixture is mounted read-only'
+fi
+
+image_id=
+wrong_policy_log=/run/particleos-podman-wrong-policy.log
+good_policy_log=/run/particleos-podman-good-policy.log
+container_log=/run/particleos-podman-container.log
+if mountpoint -q "$fixture_mount"; then
+    if timeout 60 podman pull \
+            --signature-policy "$fixture_mount/policy-wrong.json" \
+            "dir:$fixture_mount/image" >"$wrong_policy_log" 2>&1; then
+        fail 'the signed OCI image is rejected under an unrelated trust root'
+    elif grep -Eqi 'signature|public key|verification|not accepted|rejected' \
+            "$wrong_policy_log"; then
+        pass 'the signed OCI image is rejected under an unrelated trust root'
+    else
+        sed -n '1,40p' "$wrong_policy_log"
+        fail 'the signed OCI image is rejected under an unrelated trust root'
+    fi
+
+    if timeout 60 podman pull \
+            --signature-policy "$fixture_mount/policy-good.json" \
+            "dir:$fixture_mount/image" >"$good_policy_log" 2>&1; then
+        image_id=$(podman images --no-trunc --format '{{.ID}}' | head -n1)
+        if [[ $image_id =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            pass 'the signed OCI image is accepted by its narrow trust policy'
+        else
+            sed -n '1,80p' "$good_policy_log"
+            fail 'the signed OCI image is accepted by its narrow trust policy'
+            image_id=
+        fi
+    else
+        sed -n '1,80p' "$good_policy_log"
+        fail 'the signed OCI image is accepted by its narrow trust policy'
+    fi
+else
+    fail 'the signed OCI image is rejected under an unrelated trust root'
+    fail 'the signed OCI image is accepted by its narrow trust policy'
+fi
+
+if [[ -n $image_id ]] && timeout 90 podman run \
+        --name particleos-podman-audit \
+        --pull=never \
+        "$image_id" /bin/sh -c 'printf PARTICLEOS_PODMAN_RUNSC_OK' \
+        >"$container_log" 2>&1; then
+    if grep -qxF 'PARTICLEOS_PODMAN_RUNSC_OK' "$container_log"; then
+        pass 'Podman executes the trusted OCI image with default runsc/systrap'
+    else
+        sed -n '1,100p' "$container_log"
+        fail 'Podman executes the trusted OCI image with default runsc/systrap'
+    fi
+    if [[ $(podman inspect --format '{{.HostConfig.ReadonlyRootfs}}' \
+            particleos-podman-audit 2>/dev/null) == true ]]; then
+        pass 'the Podman container root filesystem is read-only by default'
+    else
+        fail 'the Podman container root filesystem is read-only by default'
+    fi
+else
+    sed -n '1,120p' "$container_log" 2>/dev/null || true
+    journalctl --boot --no-pager 2>/dev/null |
+        grep -Ei 'avc:|denied|ipe|podman|runsc|systrap' | tail -200 || true
+    fail 'Podman executes the trusted OCI image with default runsc/systrap'
+    fail 'the Podman container root filesystem is read-only by default'
+fi
+podman rm --force particleos-podman-audit >/dev/null 2>&1 || true
+if [[ -n $image_id ]]; then
+    podman rmi --force "$image_id" >/dev/null 2>&1 || true
+fi
+if mountpoint -q "$fixture_mount"; then
+    umount "$fixture_mount" || fail 'the signed-container fixture is unmounted cleanly'
 fi
 
 mapfile -t setid_files < <(find /usr -xdev -type f -perm /6000 -perm /0111 -print)

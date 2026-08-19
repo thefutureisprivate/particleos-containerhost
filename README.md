@@ -155,8 +155,9 @@ labeling is disabled, while Podman and runsc remain confined by host SELinux as
 `container_runtime_t`. Guest binaries execute through gVisor's userspace
 kernel rather than directly against the host syscall ABI.
 
-Podman defaults to a read-only container root, private namespaces, host user-ID
-mapping, fresh pulls, explicit fully qualified image names, and runsc. Treat
+Podman defaults to a read-only container root, private namespaces, a fresh
+session keyring, host user-ID mapping, fresh pulls, explicit fully qualified
+image names, and runsc. Treat
 privileged containers, host namespaces, host devices, writable host mounts,
 runtime overrides, and signature-policy overrides as reviewed exceptions.
 
@@ -386,28 +387,45 @@ The validator checks the published checksum manifest, UKI signature and signed
 command line, manifest contents, versioned verity-signature label, distributable
 GPT, and runtime A/B definitions.
 
-For release qualification, provide an OVMF variable store in which the OBS
-project certificate has already been enrolled and run the complete local VM
-audit:
+For release qualification, first create the disposable signed OCI fixture.
+This step needs `skopeo`, GnuPG, `dosfstools`, and `mtools`; it downloads the
+configured BusyBox test image, generates one-use signing and negative-test
+keys, verifies both policy outcomes, and writes a 32-MiB FAT disk:
 
 ```console
-./tests/run-vm-audit.sh /path/to/artifacts /path/to/enrolled-ovmf-vars.bin
+./tests/prepare-signed-container-fixture.sh /path/to/container-fixture.raw
 ```
 
-An optional third argument selects a different read-only OVMF Secure Boot code
-image. The runner copies the firmware variables, decompresses a disposable
-16-GiB disk, injects `vm-audit.service` and the audit script as system
-credentials, and starts QEMU/KVM with swtpm. Nothing is installed in the guest.
-It creates sparse temporary state beside the artifacts by default; set
-`VM_AUDIT_TMPDIR` to another writable filesystem when needed.
+Then provide an OVMF variable store in which the OBS project certificate has
+already been enrolled and run the complete local VM audit:
+
+```console
+./tests/run-vm-audit.sh \
+  /path/to/artifacts \
+  /path/to/enrolled-ovmf-vars.bin \
+  /path/to/container-fixture.raw
+```
+
+Set `VM_AUDIT_CONTAINER_SOURCE` to another fully qualified source transport
+when preparing the fixture. An optional fourth runner argument selects a
+different read-only OVMF Secure Boot code image. The runner copies the firmware
+variables, attaches the fixture read-only, decompresses a disposable 16-GiB
+disk, injects `vm-audit.service` and the audit script as system credentials,
+and starts QEMU/KVM with swtpm. Nothing is installed in the guest. It creates
+sparse temporary state beside the artifacts by default; set `VM_AUDIT_TMPDIR`
+to another writable filesystem when needed.
 
 The first boot validates Secure Boot, signed UKI/dm-verity, PCR7-only LUKS
 enrollment, SELinux/IPE, scoped systrap execution, A/B layout, failed units,
-nftables, module lockdown, rootful Podman, a real runsc OCI bundle, default-deny
-image policy, rootless-helper absence, set-ID state, SSH, and DNS. The second
-boot reuses the same disk and TPM state to prove persistent automatic unlock.
-Both guests power off on success or failure, each swtpm process is stopped, and
-temporary state is removed. Success ends with:
+nftables, module lockdown, rootful Podman, a direct runsc OCI bundle, and the
+default-deny image policy. It then rejects the signed fixture under the wrong
+key, imports it under an exact valid trust rule, and runs the read-only
+container through Podman's default runsc/systrap path. It also checks
+rootless-helper absence, set-ID state, SSH, and DNS. The second boot reuses the
+same disk and TPM state to prove persistent automatic unlock and repeats the
+signed-container test from clean container storage. Both guests power off on
+success or failure, each swtpm process is stopped, and temporary state is
+removed. Success ends with:
 
 ```text
 PARTICLEOS_VM_AUDIT_PASS

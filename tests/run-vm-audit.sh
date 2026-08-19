@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
-    echo "usage: $0 ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS [OVMF_CODE]" >&2
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+    echo "usage: $0 ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS CONTAINER_FIXTURE [OVMF_CODE]" >&2
     exit 2
 fi
 
 repository=$(cd "$(dirname "$0")/.." && pwd)
 artifact_directory=$(realpath "$1")
 ovmf_vars_source=$(realpath "$2")
-ovmf_code=${3:-/usr/share/qemu/ovmf-x86_64-smm-code.bin}
+container_fixture=$(realpath "$3")
+ovmf_code=${4:-/usr/share/qemu/ovmf-x86_64-smm-code.bin}
 ovmf_code=$(realpath "$ovmf_code")
 audit_timeout=${VM_AUDIT_TIMEOUT:-300}
 audit_tmpdir=${VM_AUDIT_TMPDIR:-$artifact_directory}
@@ -31,6 +32,7 @@ for command in base64 cp find grep mktemp pgrep pkill qemu-system-x86_64 realpat
     }
 done
 [[ -f $ovmf_vars_source ]] || { echo "missing OVMF variable store: $ovmf_vars_source" >&2; exit 1; }
+[[ -f $container_fixture ]] || { echo "missing signed container fixture: $container_fixture" >&2; exit 1; }
 [[ -f $ovmf_code ]] || { echo "missing OVMF code image: $ovmf_code" >&2; exit 1; }
 [[ -d $audit_tmpdir && -w $audit_tmpdir ]] || {
     echo "VM audit temporary directory is not writable: $audit_tmpdir" >&2
@@ -135,6 +137,7 @@ run_boot() {
             -drive "if=pflash,format=raw,unit=0,readonly=on,file=$ovmf_code" \
             -drive "if=pflash,format=raw,unit=1,file=$ovmf_vars" \
             -drive "if=virtio,format=raw,file=$disk" \
+            -drive "if=virtio,format=raw,readonly=on,file=$container_fixture" \
             -chardev "socket,id=chrtpm,path=$socket" \
             -tpmdev emulator,id=tpm0,chardev=chrtpm \
             -device tpm-tis,tpmdev=tpm0 \
@@ -165,8 +168,8 @@ run_boot() {
     grep '^PARTICLEOS_VM_AUDIT_PASS ' "$log"
 }
 
-echo 'Running fresh-state Secure Boot and TPM enrollment audit...'
+echo 'Running fresh-state Secure Boot, TPM enrollment, and signed-container audit...'
 run_boot 1
-echo 'Running persistent TPM-unlock audit with the same disk and TPM state...'
+echo 'Running persistent TPM-unlock and signed-container audit with the same state...'
 run_boot 2
 echo 'ParticleOS two-boot VM audit passed; both guests and TPM emulators are stopped.'
