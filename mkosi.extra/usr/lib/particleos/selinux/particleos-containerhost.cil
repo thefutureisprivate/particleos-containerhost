@@ -2,32 +2,33 @@
 
 ; Host-specific restrictions and the narrow exceptions required by the
 ; confined rootful gVisor runtime.
+(type gvisor_t)
+(type gvisor_exec_t)
+
 (block particleos_containerhost
   ; Podman remains in Fedora's container_runtime_t. Only the gVisor binaries
   ; transition into this separate domain, which inherits the common runtime
   ; baseline but receives the systrap-only permissions below.
-  (type gvisor_t)
-  (type gvisor_exec_t)
-  (roletype system_r gvisor_t)
-  (roletype unconfined_r gvisor_t)
-  (typeattributeset .domain (gvisor_t))
-  (typeattributeset .container_runtime_domain (gvisor_t))
-  (typeattributeset .file_type (gvisor_exec_t))
-  (typeattributeset .exec_type (gvisor_exec_t))
+  (roletype system_r .gvisor_t)
+  (roletype unconfined_r .gvisor_t)
+  (typeattributeset .domain (.gvisor_t))
+  (typeattributeset .container_runtime_domain (.gvisor_t))
+  (typeattributeset .file_type (.gvisor_exec_t))
+  (typeattributeset .exec_type (.gvisor_exec_t))
 
   (typeattribute gvisor_launcher_domain)
   (typeattributeset gvisor_launcher_domain
     (.container_runtime_t .initrc_t .unconfined_t))
-  (typetransition gvisor_launcher_domain gvisor_exec_t process gvisor_t)
-  (allow gvisor_launcher_domain gvisor_exec_t
+  (typetransition gvisor_launcher_domain .gvisor_exec_t process .gvisor_t)
+  (allow gvisor_launcher_domain .gvisor_exec_t
     (file (entrypoint execute read open getattr map)))
-  (allow gvisor_launcher_domain gvisor_t
+  (allow gvisor_launcher_domain .gvisor_t
     (process (transition)))
-  (allow gvisor_launcher_domain gvisor_t
+  (allow gvisor_launcher_domain .gvisor_t
     (process2 (nosuid_transition nnp_transition)))
-  (allow gvisor_t gvisor_launcher_domain
+  (allow .gvisor_t gvisor_launcher_domain
     (process (sigchld)))
-  (allow gvisor_t gvisor_exec_t
+  (allow .gvisor_t .gvisor_exec_t
     (file (entrypoint execute execute_no_trans read open getattr map)))
 
   ; IPE cannot authenticate the executable anonymous memory used by systrap.
@@ -36,7 +37,7 @@
   ; the IPE EXECUTE exception a domain-scoped SELinux exception instead of a
   ; host-wide permission for JIT-style execution.
   (typeattribute anonymous_exec_privileged_domain)
-  (typeattributeset anonymous_exec_privileged_domain (gvisor_t))
+  (typeattributeset anonymous_exec_privileged_domain (.gvisor_t))
 
   (typeattribute anonymous_exec_restricted_domain)
   (typeattributeset anonymous_exec_restricted_domain
@@ -47,11 +48,11 @@
 
   ; Yama mode 2 and deny_ptrace remain active. Systrap needs one same-domain
   ; ptrace operation to initialize executor children, so grant only that edge.
-  (allow gvisor_t self (process (ptrace)))
+  (allow .gvisor_t self (process (ptrace)))
 
   (typeattribute userns_privileged_domain)
   (typeattributeset userns_privileged_domain
-    (.init_t .kernel_t .systemd_importd_t gvisor_t))
+    (.init_t .kernel_t .systemd_importd_t .gvisor_t))
 
   (typeattribute userns_restricted_domain)
   (typeattributeset userns_restricted_domain

@@ -74,12 +74,12 @@ require_fixed '# needssslcertforbuild' .obs/ipe-policy-containerhost/ipe-policy-
 require_fixed 'systemd-keyutil' .obs/ipe-policy-containerhost/ipe-policy-containerhost.spec 'the IPE policy is packaged as signed PKCS#7'
 selinux_policy=mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil
 require_fixed '(type gvisor_t)' "$selinux_policy" 'SELinux defines a dedicated gVisor process domain'
-require_fixed '(typeattributeset .container_runtime_domain (gvisor_t))' "$selinux_policy" 'gVisor inherits only the common runtime baseline'
-require_fixed '(typetransition gvisor_launcher_domain gvisor_exec_t process gvisor_t)' "$selinux_policy" 'gVisor binaries transition out of the Podman domain'
-require_fixed '(typeattributeset anonymous_exec_privileged_domain (gvisor_t))' "$selinux_policy" 'SELinux reserves anonymous execution for gVisor alone'
+require_fixed '(typeattributeset .container_runtime_domain (.gvisor_t))' "$selinux_policy" 'gVisor inherits only the common runtime baseline'
+require_fixed '(typetransition gvisor_launcher_domain .gvisor_exec_t process .gvisor_t)' "$selinux_policy" 'gVisor binaries transition out of the Podman domain'
+require_fixed '(typeattributeset anonymous_exec_privileged_domain (.gvisor_t))' "$selinux_policy" 'SELinux reserves anonymous execution for gVisor alone'
 require_fixed '(deny anonymous_exec_restricted_domain self (process (execmem execstack)))' "$selinux_policy" 'SELinux denies executable anonymous memory outside the runtime'
 require_fixed '(deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy" 'SELinux denies systrap-style tmpfs entrypoints outside the runtime'
-require_fixed '(allow gvisor_t self (process (ptrace)))' "$selinux_policy" 'SELinux permits only gVisor self-ptrace needed by systrap'
+require_fixed '(allow .gvisor_t self (process (ptrace)))' "$selinux_policy" 'SELinux permits only gVisor self-ptrace needed by systrap'
 if ! grep -RqsE '^Type=(home|swap)$' mkosi.extra/usr/lib/repart.d; then
     pass 'no unencrypted home or swap partition exists'
 else
@@ -121,7 +121,7 @@ require_fixed 'kernel.unprivileged_userns_clone = 0' mkosi.extra/usr/lib/sysctl.
 require_fixed 'kernel.yama.ptrace_scope = 2' mkosi.extra/usr/lib/sysctl.d/70-particleos-hardening.conf 'Yama requires CAP_SYS_PTRACE for systrap initialization'
 require_fixed 'setsebool -P deny_ptrace=on' mkosi.postinst.chroot 'SELinux denies ptrace globally outside explicit policy'
 require_fixed '(deny userns_restricted_domain self (user_namespace (create)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'SELinux denies user namespaces by default'
-require_fixed '(.init_t .kernel_t .systemd_importd_t gvisor_t)' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'only gVisor and trusted system helpers have the namespace exception'
+require_fixed '(.init_t .kernel_t .systemd_importd_t .gvisor_t)' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'only gVisor and trusted system helpers have the namespace exception'
 require_fixed '(allow .initrc_t .container_runtime_t (process2 (nosuid_transition)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'system services may enter the confined runtime from authenticated /usr'
 require_fixed 'SELINUX=enforcing' mkosi.extra/etc/selinux/config 'SELinux is enforcing in userspace'
 require_fixed 'authselect select local --force' mkosi.postinst.chroot 'Fedora local authentication profile is explicit'

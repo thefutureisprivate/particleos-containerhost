@@ -60,11 +60,11 @@ else
 fi
 if [[ $(getenforce) == Enforcing ]]; then pass 'SELinux is enforcing'; else fail 'SELinux is enforcing'; fi
 selinux_policy=/usr/lib/particleos/selinux/particleos-containerhost.cil
-if grep -qxF '  (type gvisor_t)' "$selinux_policy" &&
-        grep -qxF '  (typeattributeset anonymous_exec_privileged_domain (gvisor_t))' "$selinux_policy" &&
+if grep -qxF '(type gvisor_t)' "$selinux_policy" &&
+        grep -qxF '  (typeattributeset anonymous_exec_privileged_domain (.gvisor_t))' "$selinux_policy" &&
         grep -qxF '  (deny anonymous_exec_restricted_domain self (process (execmem execstack)))' "$selinux_policy" &&
         grep -qxF '  (deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy" &&
-        grep -qxF '  (allow gvisor_t self (process (ptrace)))' "$selinux_policy"; then
+        grep -qxF '  (allow .gvisor_t self (process (ptrace)))' "$selinux_policy"; then
     pass 'SELinux reserves executable anonymous memory for the dedicated gVisor domain'
 else
     fail 'SELinux reserves executable anonymous memory for the dedicated gVisor domain'
