@@ -136,6 +136,12 @@ for specification in \
     if [[ $count -eq $expected ]]; then pass "two A/B $description exist"; else fail "two A/B $description exist"; fi
 done
 check 'systemd-sysupdate can enumerate the A/B deployment' systemd-sysupdate list
+if [[ $(stat -c '%C' /usr/lib/systemd/import-pubring.pgp 2>/dev/null) == \
+        system_u:object_r:systemd_importd_var_lib_t:s0 ]]; then
+    pass 'the immutable update trust key has an importd-readable label'
+else
+    fail 'the immutable update trust key has an importd-readable label'
+fi
 if [[ $(systemctl is-enabled systemd-sysupdate-reboot.timer 2>/dev/null) == enabled ]]; then
     pass 'staged updates have an automatic reboot timer'
 else
@@ -154,6 +160,11 @@ if [[ -z $(systemctl --failed --no-legend --plain) ]]; then
 else
     systemctl --failed --no-pager || true
     fail 'systemd has no failed units'
+fi
+if [[ -L /run/udev/control ]]; then
+    pass 'the udev compatibility control link is available'
+else
+    fail 'the udev compatibility control link is available'
 fi
 for unit in \
     authselect-apply-changes.service \

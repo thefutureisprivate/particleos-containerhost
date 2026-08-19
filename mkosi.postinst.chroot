@@ -53,6 +53,7 @@ semodule -X 300 -i \
 selinux_local_contexts=/etc/selinux/targeted/contexts/files/file_contexts.local
 for local_context in \
     '/etc/selinux -l system_u:object_r:etc_t:s0' \
+    '/usr/lib/systemd/import-pubring\.pgp -- system_u:object_r:systemd_importd_var_lib_t:s0' \
     '/usr/libexec/gvisor(/.*)? -- system_u:object_r:gvisor_exec_t:s0'; do
     if ! grep -Fqx "$local_context" "$selinux_local_contexts"; then
         printf '%s\n' "$local_context" >>"$selinux_local_contexts"

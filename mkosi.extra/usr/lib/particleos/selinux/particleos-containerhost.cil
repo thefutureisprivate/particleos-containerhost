@@ -68,6 +68,10 @@
   ; is granted to the runtime.
   (allow .gvisor_t .proc_t (file (read)))
 
+  ; systemd v261 creates the legacy udev control path as a symlink to its
+  ; Varlink socket. Permit PID 1 to create only that policy-typed link class.
+  (allow .init_t .udev_var_run_t (lnk_file (create)))
+
   ; The authenticated /usr partition is mounted nosuid. Preserve only the
   ; existing Fedora daemon and login transitions required by this host.
   (allow .init_t .udev_t (process2 (nosuid_transition)))

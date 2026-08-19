@@ -127,7 +127,9 @@ require_fixed '(allow .gvisor_t self (user_namespace (create)))' mkosi.extra/usr
 require_fixed '(allow .gvisor_t .null_device_t (chr_file (setattr)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'gVisor may normalize only inherited null-device stdio'
 require_fixed '(allow .gvisor_t .container_runtime_t (fifo_file (setattr)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'gVisor may normalize only conmon runtime FIFOs'
 require_fixed '(allow .gvisor_t .proc_t (file (read)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'gVisor may read host proc data without mutating it'
+require_fixed '(allow .init_t .udev_var_run_t (lnk_file (create)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'PID 1 may create only the typed udev compatibility link'
 require_fixed '(allow .initrc_t .container_runtime_t (process2 (nosuid_transition)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'system services may enter the confined runtime from authenticated /usr'
+require_fixed '/usr/lib/systemd/import-pubring\.pgp -- system_u:object_r:systemd_importd_var_lib_t:s0' mkosi.postinst.chroot 'the immutable update key is readable only as importd data'
 require_fixed 'SELINUX=enforcing' mkosi.extra/etc/selinux/config 'SELinux is enforcing in userspace'
 require_fixed 'authselect select local --force' mkosi.postinst.chroot 'Fedora local authentication profile is explicit'
 for unit in \
@@ -195,6 +197,8 @@ require_fixed 'podman run' tests/vm-audit.sh 'VM audit executes a trusted image 
 require_fixed 'PARTICLEOS_VM_AUDIT_PASS' tests/vm-audit.sh 'VM audit has an unambiguous success marker'
 require_fixed 'kernel.yama.ptrace_scope' tests/vm-audit.sh 'VM audit verifies the systrap-compatible Yama boundary'
 require_fixed 'getsebool deny_ptrace' tests/vm-audit.sh 'VM audit verifies the global SELinux ptrace restriction'
+require_fixed 'the immutable update trust key has an importd-readable label' tests/vm-audit.sh 'VM audit verifies update-key SELinux access'
+require_fixed 'the udev compatibility control link is available' tests/vm-audit.sh 'VM audit verifies the udev control path'
 require_fixed 'io.systemd.stub.kernel-cmdline-extra=systemd.wants=vm-audit.service' tests/run-vm-audit.sh 'VM runner requests the injected audit unit'
 require_fixed 'readonly=on,file=$container_fixture' tests/run-vm-audit.sh 'VM runner attaches the signed-container fixture read-only'
 require_fixed 'run_boot 1' tests/run-vm-audit.sh 'VM runner audits fresh TPM enrollment'
