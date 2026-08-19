@@ -51,7 +51,7 @@ def run_case(root: Path, name: str, entries: list[tuple[str, bytes, str]], ok: b
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="particleos-repart-test.") as temporary:
         root = Path(temporary)
-        run_case(root, "good", [("40-root.conf", b"[Partition]\nType=root\n", "file")], True)
+        run_case(root, "good", [("./40-root.conf", b"[Partition]\nType=root\n", "file")], True)
         assert (root / "good/40-root.conf").read_bytes() == b"[Partition]\nType=root\n"
 
         bad_cases = {
@@ -64,7 +64,7 @@ def main() -> None:
             "oversize": [("40-root.conf", b"x" * (64 * 1024 + 1), "file")],
             "duplicate": [
                 ("40-root.conf", b"one", "file"),
-                ("40-root.conf", b"two", "file"),
+                ("./40-root.conf", b"two", "file"),
             ],
         }
         for name, entries in bad_cases.items():
