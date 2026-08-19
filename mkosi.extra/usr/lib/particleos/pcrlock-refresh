@@ -34,11 +34,13 @@ fi
 [[ ${#ukis[@]} -ge 1 && ${#ukis[@]} -le 2 ]]
 
 component_parent=/var/lib/pcrlock.d
-component="$component_parent/750-particleos-uki.pcrlock.d"
+component="$component_parent/650-particleos-uki.pcrlock.d"
 previous="$component_parent/.particleos-uki.previous"
 failed="$component_parent/.particleos-uki.failed"
+obsolete="$component_parent/750-particleos-uki.pcrlock.d"
+obsolete_backup="$component_parent/.particleos-uki.obsolete"
 install -d -m 0700 "$component_parent"
-[[ ! -e $previous && ! -e $failed ]]
+[[ ! -e $previous && ! -e $failed && ! -e $obsolete_backup ]]
 staging=$(mktemp -d "$component_parent/.particleos-uki.XXXXXXXX")
 cleanup() {
     if [[ -n ${staging:-} && -d $staging && $staging == "$component_parent/".particleos-uki.* ]]; then
@@ -65,6 +67,19 @@ done
 /usr/lib/systemd/systemd-pcrlock lock-secureboot-policy
 /usr/lib/systemd/systemd-pcrlock lock-secureboot-authority
 
+# systemd-stub measures the UKI before the built-in 750-enter-initrd
+# component. An older development image placed these records at 750, which
+# predicted a PCR 11 state that could never unlock on the next boot. Hide that
+# invalid component transactionally while replacing it.
+if [[ -e $obsolete ]]; then
+    [[ -d $obsolete && ! -L $obsolete ]]
+    mapfile -d '' unexpected < <(
+        find "$obsolete" -mindepth 1 -maxdepth 1 ! -type f -print0
+    )
+    [[ ${#unexpected[@]} -eq 0 ]]
+    mv -- "$obsolete" "$obsolete_backup"
+fi
+
 if [[ -d $component ]]; then
     mv -- "$component" "$previous"
 fi
@@ -75,6 +90,9 @@ if ! /usr/lib/systemd/systemd-pcrlock make-policy \
     mv -- "$component" "$failed"
     if [[ -d $previous ]]; then
         mv -- "$previous" "$component"
+    fi
+    if [[ -d $obsolete_backup ]]; then
+        mv -- "$obsolete_backup" "$obsolete"
     fi
     find "$failed" -maxdepth 1 -type f -delete
     rmdir "$failed"
@@ -88,6 +106,10 @@ grep -Eq '"pcr"[[:space:]]*:[[:space:]]*11([,}])' "$policy"
 if [[ -d $previous ]]; then
     find "$previous" -maxdepth 1 -type f -delete
     rmdir "$previous"
+fi
+if [[ -d $obsolete_backup ]]; then
+    find "$obsolete_backup" -maxdepth 1 -type f -delete
+    rmdir "$obsolete_backup"
 fi
 if [[ $mode == all && ${#ukis[@]} -eq 2 ]]; then
     {

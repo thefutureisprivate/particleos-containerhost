@@ -229,8 +229,10 @@ Persistent state is LUKS2 encrypted; systemd-repart creates it with a
 PCR7-bound bootstrap TPM token. Before the first boot can complete,
 `particleos-pcrlock-enroll.service` predicts the current UKI's PCR 11
 measurement, creates a strict PCR 7+11 policy in a local TPM NV index, enrolls
-a new LUKS token, and atomically wipes the bootstrap TPM token. Boot blessing
-requires that migration to finish.
+a new LUKS token, and atomically wipes the bootstrap TPM token. UKI records use
+systemd-pcrlock's 650 kernel component slot, before the `750-enter-initrd`
+barrier at which the encrypted root is unlocked. Boot blessing requires that
+migration to finish.
 
 After sysupdate installs a candidate, both the running and candidate UKIs are
 verified with the immutable OBS project certificate and temporarily admitted

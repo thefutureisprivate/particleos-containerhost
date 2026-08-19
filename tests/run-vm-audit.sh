@@ -115,6 +115,7 @@ zstd --sparse -q -d -f -o "$disk" "${compressed_images[0]}"
 truncate -s 16G "$disk"
 
 audit_service=$(base64 -w0 "$repository/tests/vm-audit.service")
+audit_target=$(base64 -w0 "$repository/tests/vm-audit.target")
 audit_script=$(base64 -w0 "$repository/tests/vm-audit.sh")
 
 run_boot() {
@@ -154,8 +155,9 @@ run_boot() {
             -serial "file:$log" \
             -monitor none \
             -no-reboot \
-            -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.wants=vm-audit.service systemd.mask=serial-getty@ttyS0.service' \
+            -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.unit=vm-audit.target systemd.mask=serial-getty@ttyS0.service' \
             -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.vm-audit.service=$audit_service" \
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.vm-audit.target=$audit_target" \
             -smbios "type=11,value=io.systemd.credential.binary:vm-audit=$audit_script"; then
         qemu_active=0
         stop_tpm

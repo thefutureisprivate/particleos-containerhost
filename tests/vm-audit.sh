@@ -251,15 +251,18 @@ else
     printf '%s\n' "${public_gvisor_binaries[@]}"
     fail 'Podman, runsc, and every gVisor sidecar are administrative-only'
 fi
-if ! setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
-        --reuid=nobody --regid=nobody --clear-groups \
+if ! systemd-run --quiet --wait --collect --pipe \
+        --unit=particleos-runsc-unprivileged-audit.service \
+        --property=Type=exec \
+        --property=User=nobody \
+        --property=Group=nobody \
+        --property=NoNewPrivileges=yes \
+        --property=CapabilityBoundingSet= \
+        --property=AmbientCapabilities= \
         "$runsc" --version >/dev/null 2>&1; then
     pass 'an unprivileged account cannot execute runsc directly'
 else
     stat -c 'runsc mode=%a owner=%U group=%G' "$runsc" 2>/dev/null || true
-    setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
-        --reuid=nobody --regid=nobody --clear-groups \
-        id 2>/dev/null || true
     fail 'an unprivileged account cannot execute runsc directly'
 fi
 
@@ -411,11 +414,14 @@ EOF
     if [[ ${#health_containers[@]} -eq 1 ]]; then
         health_container=${health_containers[0]}
     fi
-    if [[ -n $health_container ]] &&
-            ps -eZ | grep -qE 'system_u:system_r:gvisor_t:s0 .*runsc'; then
+    gvisor_processes=$(ps -eZ 2>/dev/null |
+        grep -E '[[:space:]]+(runsc|exe|gvisor_sentry)$' || true)
+    if [[ -n $health_container && -n $gvisor_processes ]] &&
+            ! grep -qvE '^system_u:system_r:gvisor_t:s0[[:space:]]+' \
+                <<<"$gvisor_processes"; then
         pass 'live gVisor sandbox processes run in gvisor_t'
     else
-        ps -eZ | grep -E 'gvisor|runsc|container_runtime_t' || true
+        printf '%s\n' "$gvisor_processes"
         fail 'live gVisor sandbox processes run in gvisor_t'
     fi
     if [[ -n $health_container ]] &&

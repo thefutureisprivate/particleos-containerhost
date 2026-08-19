@@ -1,0 +1,5 @@
+[Unit]
+Description=ParticleOS local VM audit target
+Requires=multi-user.target vm-audit.service
+After=multi-user.target vm-audit.service
+AllowIsolate=yes
