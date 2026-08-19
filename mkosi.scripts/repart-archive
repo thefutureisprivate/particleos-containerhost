@@ -22,6 +22,12 @@ def fail(message: str) -> "NoReturn":
 
 
 def main() -> None:
+    # Referencing this helper as an OBS signing BuildScript makes it part of
+    # the signing recipe's source closure. mkosi invokes each listed script
+    # once without extraction arguments; the signing wrapper invokes this one
+    # again with the hostile archive and a fresh destination.
+    if len(sys.argv) == 1 and os.environ.get("MKOSI_CONFIG"):
+        return
     if len(sys.argv) != 3:
         raise SystemExit(f"usage: {sys.argv[0]} ARCHIVE DESTINATION")
 

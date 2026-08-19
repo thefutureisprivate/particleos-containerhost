@@ -218,6 +218,7 @@ require_fixed 'gpgv --keyring' scripts/validate-artifacts.sh 'artifact validatio
 require_fixed 'sbverify --cert' scripts/validate-artifacts.sh 'artifact validation cryptographically verifies the UKI PE signature'
 require_fixed 'etc/ipe/ipe-policy\.p7b' scripts/validate-artifacts.sh 'artifact validation inspects the signed UKI for the IPE policy'
 require_fixed 'particleos-containerhost-repart-archive' mkosi.scripts/obs-build 'the OBS signing stage uses the hostile-input archive policy'
+require_fixed 'BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-repart-archive' mkosi.scripts/obs-postoutput 'the hostile archive validator is in the OBS signing source closure'
 python3 tests/test-repart-archive-policy.py && pass 'hostile repart archive cases are rejected' || failures=$((failures + 1))
 
 for section in \

@@ -32,4 +32,5 @@ cat >>"$OUTPUTDIR/mkosi.conf" <<'EOF'
 [Content]
 BuildScripts=
 BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-obs-build
+BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-repart-archive
 EOF
