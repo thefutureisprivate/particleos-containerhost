@@ -58,8 +58,12 @@ label="${image_id}_${image_version}_vsig"
 }
 
 definitions="$scratch/repart"
-mkdir "$definitions"
-tar -xf "$repart_archive" -C "$definitions"
+archive_helper="$sources/particleos-containerhost-repart-archive"
+[[ -x "$archive_helper" ]] || {
+    echo "Hostile-input repart archive validator is unavailable" >&2
+    exit 1
+}
+"$archive_helper" "$repart_archive" "$definitions"
 mapfile -t signature_definitions < <(
     grep -rl '^Type=usr-verity-sig$' "$definitions" --include='*.conf'
 )

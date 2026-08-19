@@ -1,7 +1,7 @@
 [Unit]
 Description=ParticleOS local VM security audit
 ConditionPathExists=!/etc/initrd-release
-After=nftables.service particleos-module-lockdown.service systemd-user-sessions.service
+After=nftables.service particleos-module-lockdown.service systemd-user-sessions.service particleos-pcrlock-enroll.service particleos-workload-health.service
 SuccessAction=poweroff
 FailureAction=poweroff
 

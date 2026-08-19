@@ -1,0 +1,11 @@
+[Unit]
+Description=Revoke superseded UKIs after boot blessing
+Documentation=https://github.com/thefutureisprivate/particleos-containerhost#updates-and-rollback
+ConditionSecurity=measured-uki
+ConditionPathExists=/var/lib/particleos/pcrlock-update-ready
+After=systemd-bless-boot.service
+Requires=systemd-bless-boot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/particleos/pcrlock-refresh current

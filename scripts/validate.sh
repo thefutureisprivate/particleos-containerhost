@@ -30,6 +30,7 @@ require_fixed 'lockdown=confidentiality' mkosi.conf 'kernel lockdown is enforced
 require_fixed 'module.sig_enforce=1' mkosi.conf 'kernel module signatures are enforced'
 require_fixed 'rootflags=nosuid,nodev,noexec' mkosi.conf 'persistent state is mounted noexec'
 require_fixed 'systemd.firstboot=headless' mkosi.conf 'first boot is unattended without disabling noninteractive provisioning'
+require_fixed 'systemd.credentials_boot_policy=strict' mkosi.conf 'null-key boot credentials are rejected by the signed UKI'
 require_fixed 'rd.systemd.mask=systemd-tpm2-setup-early.service' mkosi.conf 'the unused initrd NvPCR setup path is suppressed'
 require_fixed 'Include=mkosi-obs' mkosi.obs.conf 'upstream OBS signer is included'
 require_fixed 'SplitArtifacts=uki,partitions,roothash,os-release,repart-definitions' mkosi.obs.conf 'OBS suppresses incompatible expected-PCR artifacts'
@@ -44,7 +45,13 @@ for type in usr usr-verity usr-verity-sig; do
     if [[ "$count" -eq 2 ]]; then pass "two ${type} A/B slots exist"; else fail "two ${type} A/B slots exist"; fi
 done
 require_fixed 'Encrypt=tpm2' mkosi.extra/usr/lib/repart.d/40-root.conf 'persistent state is TPM2 encrypted'
-require_fixed 'TPM2PCRs=7' mkosi.extra/usr/lib/repart.d/40-root.conf 'state is bound to Secure Boot policy'
+require_fixed 'TPM2PCRs=7' mkosi.extra/usr/lib/repart.d/40-root.conf 'state has a first-boot PCR7 bootstrap token'
+require_fixed '--pcr=7 --pcr=11 --strict=yes --force' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime state policy strictly covers PCR7 and PCR11'
+require_fixed 'lock-secureboot-policy' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'PCR7 policy is derived from live Secure Boot variables'
+require_fixed '--wipe-slot=tpm2' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'the bootstrap TPM enrollment is replaced atomically'
+require_fixed 'ExecStartPost=/usr/lib/particleos/pcrlock-refresh all' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate-update.service.d/40-particleos-egress.conf 'updates authorize both A/B UKIs before reboot'
+require_fixed 'ExecCondition=/usr/lib/particleos/pcrlock-update-ready' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate-reboot.service.d/40-particleos-pcrlock.conf 'reboot refuses an update without a committed PCR policy'
+require_fixed 'enable systemd-sysupdate-reboot.timer' mkosi.extra/usr/lib/systemd/system-preset/10-particleos.preset 'staged updates receive an automatic reboot window'
 require_fixed 'ipe-policy-containerhost' mkosi.conf 'the systrap-compatible signed IPE policy is selected'
 require_fixed 'ipe-policy-containerhost' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS stages the systrap-compatible IPE policy'
 if grep -qxF '        ipe-policy' mkosi.conf; then
@@ -66,10 +73,13 @@ done
 require_fixed '# needssslcertforbuild' .obs/ipe-policy-containerhost/ipe-policy-containerhost.spec 'the container-host IPE policy requires OBS signing'
 require_fixed 'systemd-keyutil' .obs/ipe-policy-containerhost/ipe-policy-containerhost.spec 'the IPE policy is packaged as signed PKCS#7'
 selinux_policy=mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil
-require_fixed '(typeattributeset anonymous_exec_privileged_domain (.container_runtime_t))' "$selinux_policy" 'SELinux reserves anonymous execution for the gVisor runtime'
+require_fixed '(type gvisor_t)' "$selinux_policy" 'SELinux defines a dedicated gVisor process domain'
+require_fixed '(typeattributeset .container_runtime_domain (gvisor_t))' "$selinux_policy" 'gVisor inherits only the common runtime baseline'
+require_fixed '(typetransition gvisor_launcher_domain gvisor_exec_t process gvisor_t)' "$selinux_policy" 'gVisor binaries transition out of the Podman domain'
+require_fixed '(typeattributeset anonymous_exec_privileged_domain (gvisor_t))' "$selinux_policy" 'SELinux reserves anonymous execution for gVisor alone'
 require_fixed '(deny anonymous_exec_restricted_domain self (process (execmem execstack)))' "$selinux_policy" 'SELinux denies executable anonymous memory outside the runtime'
 require_fixed '(deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy" 'SELinux denies systrap-style tmpfs entrypoints outside the runtime'
-require_fixed '(allow .container_runtime_t self (process (ptrace)))' "$selinux_policy" 'SELinux permits only the runtime self-ptrace needed by systrap'
+require_fixed '(allow gvisor_t self (process (ptrace)))' "$selinux_policy" 'SELinux permits only gVisor self-ptrace needed by systrap'
 if ! grep -RqsE '^Type=(home|swap)$' mkosi.extra/usr/lib/repart.d; then
     pass 'no unencrypted home or swap partition exists'
 else
@@ -111,7 +121,7 @@ require_fixed 'kernel.unprivileged_userns_clone = 0' mkosi.extra/usr/lib/sysctl.
 require_fixed 'kernel.yama.ptrace_scope = 2' mkosi.extra/usr/lib/sysctl.d/70-particleos-hardening.conf 'Yama requires CAP_SYS_PTRACE for systrap initialization'
 require_fixed 'setsebool -P deny_ptrace=on' mkosi.postinst.chroot 'SELinux denies ptrace globally outside explicit policy'
 require_fixed '(deny userns_restricted_domain self (user_namespace (create)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'SELinux denies user namespaces by default'
-require_fixed '.container_runtime_t' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'gVisor runtime domain has the narrow namespace exception'
+require_fixed '(.init_t .kernel_t .systemd_importd_t gvisor_t)' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'only gVisor and trusted system helpers have the namespace exception'
 require_fixed '(allow .initrc_t .container_runtime_t (process2 (nosuid_transition)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'system services may enter the confined runtime from authenticated /usr'
 require_fixed 'SELINUX=enforcing' mkosi.extra/etc/selinux/config 'SELinux is enforcing in userspace'
 require_fixed 'authselect select local --force' mkosi.postinst.chroot 'Fedora local authentication profile is explicit'
@@ -120,7 +130,6 @@ for unit in \
     systemd-homed.service \
     systemd-homed-firstboot.service \
     systemd-tpm2-setup-early.service \
-    systemd-tpm2-setup.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
     systemd-pcrproduct.service \
@@ -128,6 +137,11 @@ for unit in \
     systemd-sysupdate-notify-pcrlock.socket; do
     require_fixed "$unit" mkosi.finalize "$unit is immutably masked"
 done
+if rg -Fq 'systemd-tpm2-setup.service' mkosi.finalize; then
+    fail 'systemd-tpm2-setup.service remains available for the machine-local PCR policy'
+else
+    pass 'systemd-tpm2-setup.service remains available for the machine-local PCR policy'
+fi
 
 # Literal implementation strings, not expressions for this validator.
 # shellcheck disable=SC2016
@@ -136,6 +150,8 @@ require_fixed 'find "$image_tree" -xdev -type f -perm /6000 -perm /0111' mkosi.f
 require_fixed 'chmod 4755 "$pam_shadow_helper"' mkosi.finalize 'only unix_chkpwd setuid is restored'
 # shellcheck disable=SC2016
 require_fixed 'chmod 0750 "$BUILDROOT/usr/bin/podman"' mkosi.finalize 'Podman execution is restricted'
+require_fixed 'chmod 0750 "$BUILDROOT/usr/libexec/gvisor/runsc"' mkosi.finalize 'direct runsc execution is restricted'
+require_fixed 'gvisor_exec_t' mkosi.postinst.chroot 'gVisor executables receive the dedicated transition type'
 require_fixed 'PasswordAuthentication no' mkosi.extra/etc/ssh/sshd_config.d/40-particleos-hardening.conf 'SSH password authentication is disabled'
 require_fixed 'PermitRootLogin no' mkosi.extra/etc/ssh/sshd_config.d/40-particleos-hardening.conf 'SSH root login is disabled'
 require_fixed 'DNSOverTLS=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-particleos-dns.conf 'strict DNS-over-TLS is enabled'
@@ -147,8 +163,13 @@ require_fixed 'chain input {' "$firewall" 'host input firewall exists'
 require_fixed 'type filter hook input priority filter; policy drop;' "$firewall" 'input is default deny'
 require_fixed 'type filter hook forward priority filter; policy drop;' "$firewall" 'forwarding is default deny'
 require_fixed 'type filter hook output priority filter; policy drop;' "$firewall" 'output is default deny'
-require_fixed 'iifname "podman*" accept' "$firewall" 'rootful Podman outbound forwarding is allowed'
-require_fixed 'oifname "podman*" ct status dnat accept' "$firewall" 'only DNATed Podman ingress is forwarded'
+require_fixed 'workload_egress_tcp4' "$firewall" 'workload TCP egress requires an exact destination set'
+require_fixed 'workload_egress_udp6' "$firewall" 'workload UDP egress requires an exact destination set'
+require_fixed 'workload_ingress_tcp4' "$firewall" 'DNAT TCP ingress requires an exact workload destination set'
+require_fixed 'workload_ingress_udp6' "$firewall" 'DNAT UDP ingress requires an exact workload destination set'
+reject_fixed 'iifname "podman*" accept' "$firewall" 'no unrestricted workload forwarding remains'
+reject_fixed 'oifname "podman*" ct status dnat accept' "$firewall" 'no unrestricted DNAT forwarding remains'
+require_fixed 'include "/etc/particleos/nftables.d/*.nft"' "$firewall" 'root-owned exact forwarding policy persists across boot'
 reject_fixed 'flush ruleset' "$firewall" 'host policy does not erase Netavark rules'
 require_fixed 'nft_hash' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables meter support loads before module lockdown'
 require_fixed 'nft_limit' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables rate limiting loads before module lockdown'
@@ -175,6 +196,9 @@ require_fixed 'run_boot 1' tests/run-vm-audit.sh 'VM runner audits fresh TPM enr
 require_fixed 'run_boot 2' tests/run-vm-audit.sh 'VM runner audits persistent TPM unlock'
 require_fixed 'stop_tpm' tests/run-vm-audit.sh 'VM runner stops its TPM emulator after every boot'
 require_fixed 'zstd --sparse' tests/run-vm-audit.sh 'VM runner preserves sparse disk allocation'
+require_fixed 'particleos-workload-health.service' mkosi.extra/usr/lib/systemd/system/systemd-bless-boot.service.d/40-particleos-rollback.conf 'boot blessing depends on workload health'
+require_fixed 'Wants=particleos-pcrlock-prune.service' mkosi.extra/usr/lib/systemd/system/systemd-bless-boot.service.d/40-particleos-rollback.conf 'superseded UKIs are revoked only after blessing'
+require_fixed 'Notify=healthy' mkosi.extra/usr/lib/particleos/check-workload-health 'Quadlet health must gate systemd readiness'
 
 service=.obs/runsc/_service
 require_fixed 'release/20260810.0/x86_64/gvisor.tar.bz2' "$service" 'gVisor release archive is pinned'
@@ -190,7 +214,11 @@ reject_fixed 'PCR policy signing requires' mkosi.scripts/obs-build 'obsolete PCR
 require_fixed 'sha256sum -- "${artifact_names[@]}"' mkosi.scripts/obs-build 'checksums are regenerated after final signed artifacts are staged'
 # shellcheck disable=SC2016
 require_fixed 'sha256sum -c "${checksum_manifest##*/}"' scripts/validate-artifacts.sh 'artifact validation verifies the published checksum manifest'
+require_fixed 'gpgv --keyring' scripts/validate-artifacts.sh 'artifact validation authenticates the checksum digest with the pinned OBS key'
+require_fixed 'sbverify --cert' scripts/validate-artifacts.sh 'artifact validation cryptographically verifies the UKI PE signature'
 require_fixed 'etc/ipe/ipe-policy\.p7b' scripts/validate-artifacts.sh 'artifact validation inspects the signed UKI for the IPE policy'
+require_fixed 'particleos-containerhost-repart-archive' mkosi.scripts/obs-build 'the OBS signing stage uses the hostile-input archive policy'
+python3 tests/test-repart-archive-policy.py && pass 'hostile repart archive cases are rejected' || failures=$((failures + 1))
 
 for section in \
     '## Architecture' \

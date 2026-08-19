@@ -1,0 +1,100 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+[[ $# -eq 1 ]] || {
+    echo "usage: $0 current|all" >&2
+    exit 2
+}
+[[ $1 == current || $1 == all ]] || {
+    echo "usage: $0 current|all" >&2
+    exit 2
+}
+mode=$1
+boot_root=$(bootctl --print-boot-path)
+boot_root=$(realpath -e -- "$boot_root")
+uki_directory="$boot_root/EFI/Linux"
+[[ -d $uki_directory && ! -L $uki_directory ]]
+
+current_uki=$(bootctl --print-stub-path)
+if [[ ! -e $current_uki && $current_uki =~ ^(.+)\+[0-9]+-[0-9]+\.efi$ ]]; then
+    current_uki=${BASH_REMATCH[1]}.efi
+fi
+current_uki=$(realpath -e -- "$current_uki")
+[[ $current_uki == "$uki_directory/"* && -f $current_uki && ! -L $current_uki ]]
+
+if [[ $mode == current ]]; then
+    ukis=("$current_uki")
+else
+    mapfile -d '' ukis < <(
+        find "$uki_directory" -maxdepth 1 -type f \
+            -name 'ParticleOS-Host_*.efi' -print0 | sort -z
+    )
+fi
+[[ ${#ukis[@]} -ge 1 && ${#ukis[@]} -le 2 ]]
+
+component_parent=/var/lib/pcrlock.d
+component="$component_parent/750-particleos-uki.pcrlock.d"
+previous="$component_parent/.particleos-uki.previous"
+failed="$component_parent/.particleos-uki.failed"
+install -d -m 0700 "$component_parent"
+[[ ! -e $previous && ! -e $failed ]]
+staging=$(mktemp -d "$component_parent/.particleos-uki.XXXXXXXX")
+cleanup() {
+    if [[ -n ${staging:-} && -d $staging && $staging == "$component_parent/".particleos-uki.* ]]; then
+        find "$staging" -maxdepth 1 -type f -delete
+        rmdir "$staging"
+    fi
+}
+trap cleanup EXIT
+
+for uki in "${ukis[@]}"; do
+    resolved=$(realpath -e -- "$uki")
+    [[ $resolved == "$uki_directory/"* && -f $resolved && ! -L $resolved ]]
+    [[ $(bootctl kernel-identify "$resolved") == uki ]]
+    sbverify --cert /usr/lib/verity.d/_projectcert.crt "$resolved" >/dev/null
+    digest=$(sha256sum -- "$resolved")
+    digest=${digest%% *}
+    /usr/lib/systemd/systemd-pcrlock lock-uki "$resolved" \
+        --pcrlock="$staging/300-$digest.pcrlock"
+done
+
+# PCR 7 is authorized from the platform's live Secure Boot variables, while
+# lock-uki contributes the signed UKI measurements needed for PCR 11.  Both
+# inputs are local and TPM-backed; no public, reusable policy is shipped.
+/usr/lib/systemd/systemd-pcrlock lock-secureboot-policy
+/usr/lib/systemd/systemd-pcrlock lock-secureboot-authority
+
+if [[ -d $component ]]; then
+    mv -- "$component" "$previous"
+fi
+mv -- "$staging" "$component"
+staging=
+if ! /usr/lib/systemd/systemd-pcrlock make-policy \
+        --pcr=7 --pcr=11 --strict=yes --force; then
+    mv -- "$component" "$failed"
+    if [[ -d $previous ]]; then
+        mv -- "$previous" "$component"
+    fi
+    find "$failed" -maxdepth 1 -type f -delete
+    rmdir "$failed"
+    exit 1
+fi
+
+policy=/var/lib/systemd/pcrlock.json
+grep -Eq '"pcr"[[:space:]]*:[[:space:]]*7([,}])' "$policy"
+grep -Eq '"pcr"[[:space:]]*:[[:space:]]*11([,}])' "$policy"
+
+if [[ -d $previous ]]; then
+    find "$previous" -maxdepth 1 -type f -delete
+    rmdir "$previous"
+fi
+if [[ $mode == all && ${#ukis[@]} -eq 2 ]]; then
+    {
+        printf 'pcrlock-policy-sha256 '
+        sha256sum -- "$policy" | cut -d ' ' -f1
+    } >/var/lib/particleos/pcrlock-update-ready
+    chmod 0600 /var/lib/particleos/pcrlock-update-ready
+else
+    rm -f -- /var/lib/particleos/pcrlock-update-ready
+fi

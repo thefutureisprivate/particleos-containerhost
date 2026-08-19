@@ -36,6 +36,7 @@ else
 fi
 check_grep 'kernel lockdown is in confidentiality mode' '\[confidentiality\]' /sys/kernel/security/lockdown
 check_grep 'IPE enforcement is requested by the signed UKI' '(^| )ipe\.enforce=1( |$)' /proc/cmdline
+check_grep 'null-key boot credentials are rejected by the signed UKI' '(^| )systemd\.credentials_boot_policy=strict( |$)' /proc/cmdline
 ipe_policy=
 for active in /sys/kernel/security/ipe/policies/*/active; do
     if [[ -f $active && $(<"$active") == 1 ]]; then
@@ -59,13 +60,14 @@ else
 fi
 if [[ $(getenforce) == Enforcing ]]; then pass 'SELinux is enforcing'; else fail 'SELinux is enforcing'; fi
 selinux_policy=/usr/lib/particleos/selinux/particleos-containerhost.cil
-if grep -qxF '  (typeattributeset anonymous_exec_privileged_domain (.container_runtime_t))' "$selinux_policy" &&
+if grep -qxF '  (type gvisor_t)' "$selinux_policy" &&
+        grep -qxF '  (typeattributeset anonymous_exec_privileged_domain (gvisor_t))' "$selinux_policy" &&
         grep -qxF '  (deny anonymous_exec_restricted_domain self (process (execmem execstack)))' "$selinux_policy" &&
         grep -qxF '  (deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy" &&
-        grep -qxF '  (allow .container_runtime_t self (process (ptrace)))' "$selinux_policy"; then
-    pass 'SELinux reserves executable anonymous memory for the gVisor runtime'
+        grep -qxF '  (allow gvisor_t self (process (ptrace)))' "$selinux_policy"; then
+    pass 'SELinux reserves executable anonymous memory for the dedicated gVisor domain'
 else
-    fail 'SELinux reserves executable anonymous memory for the gVisor runtime'
+    fail 'SELinux reserves executable anonymous memory for the dedicated gVisor domain'
 fi
 if [[ $(sysctl -n kernel.yama.ptrace_scope) == 2 ]]; then
     pass 'Yama restricts ptrace to CAP_SYS_PTRACE'
@@ -104,15 +106,18 @@ state=/dev/disk/by-partlabel/ParticleOS-Host-root
 if [[ -b $state ]]; then pass 'persistent state partition exists'; else fail 'persistent state partition exists'; fi
 luks_metadata=$(cryptsetup luksDump --dump-json-metadata "$state" 2>/dev/null || true)
 luks_metadata_compact=$(tr -d '[:space:]' <<<"$luks_metadata")
-if grep -qF '"tpm2-pcrs":[7]' <<<"$luks_metadata_compact"; then
-    pass 'state TPM token is bound to PCR 7'
+if grep -qF '"tpm2-pcrlock":true' <<<"$luks_metadata_compact" &&
+        ! grep -qF '"tpm2-pcrs":[7]' <<<"$luks_metadata_compact"; then
+    pass 'the PCR7 bootstrap token was replaced by an NV pcrlock token'
 else
-    fail 'state TPM token is bound to PCR 7'
+    fail 'the PCR7 bootstrap token was replaced by an NV pcrlock token'
 fi
-if ! grep -q '"tpm2-pubkey-pcrs"' <<<"$luks_metadata"; then
-    pass 'state token has no public-key PCR11 dependency'
+if grep -Eq '"pcr"[[:space:]]*:[[:space:]]*7([,}])' /var/lib/systemd/pcrlock.json &&
+        grep -Eq '"pcr"[[:space:]]*:[[:space:]]*11([,}])' /var/lib/systemd/pcrlock.json &&
+        [[ -f /var/lib/particleos/pcrlock-enrolled ]]; then
+    pass 'the TPM NV policy strictly covers Secure Boot and the booted UKI'
 else
-    fail 'state token has no public-key PCR11 dependency'
+    fail 'the TPM NV policy strictly covers Secure Boot and the booted UKI'
 fi
 unit=systemd-cryptsetup@root.service
 if [[ $(systemctl show --property=Result --value "$unit" 2>/dev/null) == success ]]; then
@@ -131,6 +136,18 @@ for specification in \
     if [[ $count -eq $expected ]]; then pass "two A/B $description exist"; else fail "two A/B $description exist"; fi
 done
 check 'systemd-sysupdate can enumerate the A/B deployment' systemd-sysupdate list
+if [[ $(systemctl is-enabled systemd-sysupdate-reboot.timer 2>/dev/null) == enabled ]]; then
+    pass 'staged updates have an automatic reboot timer'
+else
+    fail 'staged updates have an automatic reboot timer'
+fi
+if systemctl is-active --quiet particleos-workload-health.service &&
+        systemctl show -p Requires --value systemd-bless-boot.service |
+            grep -qw particleos-workload-health.service; then
+    pass 'boot blessing is gated by the workload-health service'
+else
+    fail 'boot blessing is gated by the workload-health service'
+fi
 
 if [[ -z $(systemctl --failed --no-legend --plain) ]]; then
     pass 'systemd has no failed units'
@@ -143,7 +160,6 @@ for unit in \
     systemd-homed.service \
     systemd-homed-firstboot.service \
     systemd-tpm2-setup-early.service \
-    systemd-tpm2-setup.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
     systemd-pcrproduct.service \
@@ -155,6 +171,11 @@ for unit in \
         fail "$unit is masked"
     fi
 done
+if [[ $(systemctl is-enabled systemd-tpm2-setup.service 2>/dev/null) != masked ]]; then
+    pass 'systemd-tpm2-setup.service is available for the machine-local PCR policy'
+else
+    fail 'systemd-tpm2-setup.service is available for the machine-local PCR policy'
+fi
 
 check 'host nftables service is active' systemctl is-active --quiet nftables.service
 for chain in input forward output; do
@@ -162,6 +183,24 @@ for chain in input forward output; do
         pass "nftables $chain chain is default deny"
     else
         fail "nftables $chain chain is default deny"
+    fi
+done
+forward_policy=$(nft list chain inet particleos_filter forward)
+if ! grep -qF 'iifname "podman*" accept' <<<"$forward_policy" &&
+        ! grep -qF 'oifname "podman*" ct status dnat accept' <<<"$forward_policy"; then
+    pass 'workload forwarding has no blanket Podman accept rule'
+else
+    fail 'workload forwarding has no blanket Podman accept rule'
+fi
+for set in \
+    workload_egress_tcp4 workload_egress_udp4 \
+    workload_egress_tcp6 workload_egress_udp6 \
+    workload_ingress_tcp4 workload_ingress_udp4 \
+    workload_ingress_tcp6 workload_ingress_udp6; do
+    if nft list set inet particleos_filter "$set" | grep -q 'elements ='; then
+        fail "$set is empty by default"
+    else
+        pass "$set is empty by default"
     fi
 done
 for module in nft_hash nft_limit; do
@@ -190,6 +229,23 @@ else
 fi
 runsc=/usr/libexec/gvisor/runsc
 if "$runsc" --version | grep -qF 'release-20260810.0'; then pass 'the pinned gVisor release is installed'; else fail 'the pinned gVisor release is installed'; fi
+mapfile -t public_gvisor_binaries < <(
+    find /usr/libexec/gvisor -type f -perm /0007 -print
+)
+if [[ $(stat -c '%a:%U:%G' /usr/bin/podman) == 750:root:root &&
+        $(stat -c '%a:%U:%G' "$runsc") == 750:root:root &&
+        ${#public_gvisor_binaries[@]} -eq 0 ]]; then
+    pass 'Podman, runsc, and every gVisor sidecar are administrative-only'
+else
+    printf '%s\n' "${public_gvisor_binaries[@]}"
+    fail 'Podman, runsc, and every gVisor sidecar are administrative-only'
+fi
+if ! setpriv --reuid=nobody --regid=nobody --clear-groups \
+        "$runsc" --version >/dev/null 2>&1; then
+    pass 'an unprivileged account cannot execute runsc directly'
+else
+    fail 'an unprivileged account cannot execute runsc directly'
+fi
 
 install -d -m 0700 \
     /run/particleos-runsc-audit/root \
@@ -346,6 +402,77 @@ else
     fail 'the Podman container root filesystem is read-only by default'
 fi
 podman rm --force particleos-podman-audit >/dev/null 2>&1 || true
+
+health_quadlet=/run/containers/systemd/vm-health.container
+health_log=/run/particleos-podman-health.log
+health_container=
+if [[ -n $image_id ]]; then
+    install -d -m 0700 /run/containers/systemd
+    cat >"$health_quadlet" <<EOF
+[Unit]
+Description=Disposable ParticleOS workload-health audit
+
+[Container]
+Image=$image_id
+Pull=never
+Exec=/bin/sleep 90
+HealthCmd=/bin/true
+HealthInterval=1s
+HealthRetries=3
+Notify=healthy
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+EOF
+    systemctl daemon-reload
+    if timeout 45 systemctl start vm-health.service >"$health_log" 2>&1 &&
+            /usr/lib/particleos/check-workload-health >>"$health_log" 2>&1; then
+        pass 'a healthy rootful Quadlet satisfies the boot health gate'
+    else
+        systemctl status --no-pager vm-health.service >>"$health_log" 2>&1 || true
+        sed -n '1,160p' "$health_log"
+        fail 'a healthy rootful Quadlet satisfies the boot health gate'
+    fi
+
+    mapfile -t health_containers < <(
+        podman ps --filter 'label=PODMAN_SYSTEMD_UNIT=vm-health.service' --format '{{.ID}}'
+    )
+    if [[ ${#health_containers[@]} -eq 1 ]]; then
+        health_container=${health_containers[0]}
+    fi
+    if [[ -n $health_container ]] &&
+            ps -eZ | grep -qE 'system_u:system_r:gvisor_t:s0 .*runsc'; then
+        pass 'live gVisor sandbox processes run in gvisor_t'
+    else
+        ps -eZ | grep -E 'gvisor|runsc|container_runtime_t' || true
+        fail 'live gVisor sandbox processes run in gvisor_t'
+    fi
+    if [[ -n $health_container ]] &&
+            podman exec "$health_container" /bin/sh -c 'command -v nc' >/dev/null 2>&1 &&
+            ! timeout 8 podman exec "$health_container" \
+                /bin/nc -z -w 3 1.1.1.1 443 >/dev/null 2>&1; then
+        pass 'an unlisted workload destination is denied by default'
+    else
+        fail 'an unlisted workload destination is denied by default'
+    fi
+
+    sed -i 's/^Notify=healthy$/Notify=false/' "$health_quadlet"
+    if ! /usr/lib/particleos/check-workload-health >/dev/null 2>&1; then
+        pass 'a workload without health-gated readiness blocks blessing'
+    else
+        fail 'a workload without health-gated readiness blocks blessing'
+    fi
+    sed -i 's/^Notify=false$/Notify=healthy/' "$health_quadlet"
+else
+    fail 'a healthy rootful Quadlet satisfies the boot health gate'
+    fail 'live gVisor sandbox processes run in gvisor_t'
+    fail 'an unlisted workload destination is denied by default'
+    fail 'a workload without health-gated readiness blocks blessing'
+fi
+systemctl stop vm-health.service >/dev/null 2>&1 || true
+rm -f -- "$health_quadlet"
+systemctl daemon-reload
+
 if [[ -n $image_id ]]; then
     podman rmi --force "$image_id" >/dev/null 2>&1 || true
 fi

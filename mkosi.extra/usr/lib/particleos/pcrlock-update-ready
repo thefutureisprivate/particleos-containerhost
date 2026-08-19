@@ -1,0 +1,10 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+marker=/var/lib/particleos/pcrlock-update-ready
+policy=/var/lib/systemd/pcrlock.json
+[[ -s $marker && -s $policy ]]
+read -r label expected extra <"$marker"
+[[ $label == pcrlock-policy-sha256 && -z ${extra:-} ]]
+[[ $(sha256sum -- "$policy" | cut -d ' ' -f1) == "$expected" ]]

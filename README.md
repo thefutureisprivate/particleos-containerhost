@@ -17,7 +17,7 @@ Requires x86-64 UEFI Secure Boot, TPM 2.0, and a disk of at least 16 GiB.
 - [Hardening Review](#hardening-review)
 - [Build](#build)
 - [Installation and Provisioning](#installation-and-provisioning)
-- [Updates and Recovery](#updates-and-recovery)
+- [Updates and Rollback](#updates-and-rollback)
 - [Diagnostics and Tests](#diagnostics-and-tests)
 - [Residual Risks](#residual-risks)
 - [Dependencies and Provenance](#dependencies-and-provenance)
@@ -42,19 +42,23 @@ responsibilities.
 
 ## Architecture
 
-The authenticated boot and execution chain is:
+The authenticated release, boot, and execution chain is:
 
 ```text
-OBS project certificate
-  -> signed systemd-boot and unified kernel image
-     -> embedded kernel, initrd, command line, and dm-verity root hash
-        -> signed dm-verity + read-only EROFS /usr
-           -> signed, enforcing IPE policy for kernel-fed objects
+Pinned OBS OpenPGP fingerprint
+  -> signed checksum digest -> checksum manifest -> exact release artifacts
+     -> OBS project certificate verifies the PE signature
+        -> signed systemd-boot and UKI
+           -> embedded kernel, initrd, strict command line, and verity root hash
+              -> signed dm-verity + read-only EROFS /usr
 
-TPM2 PCR 7-bound LUKS2 state + SELinux container_runtime_t
-  -> rootful Podman
-     -> release-pinned runsc using systrap
-        -> OCI workload
+TPM bootstrap token (PCR 7)
+  -> local TPM NV pcrlock policy (PCR 7 + PCR 11)
+     -> encrypted persistent state
+
+SELinux container_runtime_t (Podman)
+  -> SELinux gvisor_t (release-pinned runsc, systrap)
+     -> OCI workload
 ```
 
 The OBS project certificate signs the bootloader and UKI and verifies the
@@ -74,13 +78,16 @@ or factory-reset UKI. Recovery uses separately controlled signed media.
 - Atomic `systemd-sysupdate` transfers for the UKI, `/usr`, verity data, and
   verity signature.
 - One LUKS2/Btrfs persistent-state partition automatically unlocked by TPM 2.0.
+- TPM NV-backed PCR 7+11 policy with controlled two-version authorization
+  during updates and revocation after boot blessing.
 - SELinux enforcing with a small host-specific CIL module.
 - Signed IPE policy, kernel lockdown, mandatory module signatures, and
   irreversible post-boot module lockdown.
 - Rootful Podman with release-pinned gVisor `runsc`; systrap is explicit and
   the only installed OCI runtime.
 - Default-deny OCI image policy with no built-in signing identity.
-- Default-deny nftables input, forward, and output policy.
+- Default-deny nftables input, forward, and output policy; workload forwarding
+  starts with empty destination/protocol/port allowlists.
 - DNSSEC and strict DNS-over-TLS through systemd-resolved.
 - No rootless containers, subordinate-ID delegation, unprivileged user
   namespaces, rootless network helpers, or Podman user units.
@@ -92,19 +99,21 @@ The immutable `/usr` partition is authenticated and mounted
 `ro,nosuid,nodev`. All mutable `/etc`, `/var`, `/home`, logs, keys, and Podman
 storage live on encrypted persistent state mounted `nosuid,nodev,noexec`.
 Executable set-ID bits are removed during the build; only Fedora's
-`unix_chkpwd` helper is restored. Podman itself is executable only by root.
+`unix_chkpwd` helper is restored. Podman, runsc, and every gVisor sidecar are
+mode `0750`, owned by root, and unavailable to ordinary accounts.
 
 The signed command line enables audit, SELinux and IPE enforcement,
 confidentiality lockdown, module signature enforcement, allocation
 initialization, slab separation, page-allocation shuffling, randomized kernel
-stacks, and fail-closed initrd behavior. Legacy `vsyscall`, IA32 emulation, and
-firmware frame-buffer tunnels are disabled.
+stacks, fail-closed initrd behavior, and
+`systemd.credentials_boot_policy=strict`. Null-key boot credentials, legacy
+`vsyscall`, IA32 emulation, and firmware frame-buffer tunnels are disabled.
 
 Sysctls restrict kernel pointers and logs, BPF, performance events, io_uring,
 userfaultfd, core dumps, unsafe links and FIFOs, line-discipline loading, and
 unprivileged user namespaces. Yama mode 2 requires `CAP_SYS_PTRACE`. The
 SELinux `deny_ptrace` boolean stays enabled, with one explicit same-domain
-`container_runtime_t` ptrace edge for systrap's executor initialization.
+`gvisor_t` ptrace edge for systrap's executor initialization.
 
 Unused kernel protocols and filesystems are denied. Required storage,
 container-network, IPE, and nftables expression modules load before the
@@ -114,14 +123,16 @@ firewall; `kernel.modules_disabled=1` then prevents any later module load.
 SELinux additionally:
 
 - denies user-namespace creation to every domain except trusted boot/update
-  helpers and `container_runtime_t`;
+  helpers and `gvisor_t`;
 - denies unused host socket families while leaving protocols implemented
   inside gVisor available to workloads;
 - limits `nosuid_transition` exceptions to the Fedora services the immutable
   host actually needs;
+- transitions only the authenticated gVisor executables from Podman's
+  `container_runtime_t` into `gvisor_t`;
 - reserves executable anonymous memory and runtime-tmpfs entrypoints for
-  `container_runtime_t`; and
-- permits ptrace only from `container_runtime_t` to itself for systrap startup.
+  `gvisor_t`; and
+- permits ptrace only from `gvisor_t` to itself for systrap startup.
 
 ### IPE and systrap
 
@@ -136,7 +147,7 @@ IPE remains enforcing and default-deny for firmware, kernel modules, kexec
 images and initrds, policy, and X.509 certificates, allowing those kernel-fed
 objects only from verified boot or signed dm-verity. `EXECUTE` is delegated to
 authenticated `/usr`, the `noexec` mutable state boundary, and SELinux's
-`container_runtime_t` restrictions. IPE itself does not authenticate
+dedicated `gvisor_t` restrictions. IPE itself does not authenticate
 systrap-generated code or interpreted scripts.
 
 ## Container Model
@@ -148,12 +159,15 @@ mappings are absent. Login users cannot create user namespaces.
 
 The kernel retains a small user-namespace quota because trusted rootful gVisor
 needs namespaces internally. SELinux grants creation only to system plumbing
-and `container_runtime_t`; this is not rootless-container support.
+and `gvisor_t`; this is not rootless-container support.
 
 gVisor does not implement SELinux labels inside its sandbox. Per-container
-labeling is disabled, while Podman and runsc remain confined by host SELinux as
-`container_runtime_t`. Guest binaries execute through gVisor's userspace
-kernel rather than directly against the host syscall ABI.
+labeling is disabled. Podman remains in `container_runtime_t`; runsc and its
+sandbox processes transition into the separate `gvisor_t` domain. The latter
+inherits Fedora's common container-runtime baseline, while systrap-only
+ptrace, executable-memory, and user-namespace permissions are excluded from
+Podman. Guest binaries execute through gVisor's userspace kernel rather than
+directly against the host syscall ABI.
 
 Podman defaults to a read-only container root, private namespaces, a fresh
 session keyring, host user-ID mapping, fresh pulls, explicit fully qualified
@@ -184,29 +198,51 @@ verification, or configure unqualified registry search. Validate every trust
 change with one approved signed image and one deliberately unsigned image; the
 unsigned pull must fail before unpacking.
 
-Use root-owned Quadlet definitions under `/etc/containers/systemd/`. Pin image
-identities, use read-only mounts, drop capabilities, set CPU/memory/PID/storage
-limits, define health checks and restart behavior, and publish only reviewed
-ports.
+Use root-owned Quadlet definitions under `/etc/containers/systemd/`. Every
+`.container` must set both `HealthCmd=` and `Notify=healthy`; otherwise the
+generic workload-health gate refuses boot completion and the boot is not
+blessed. Pin image identities, use read-only mounts, drop capabilities, set
+CPU/memory/PID/storage limits, define restart behavior, and publish only
+reviewed ports.
+
+### Workload health
+
+The host discovers rootful `.container` files in the standard `/run`, `/etc`,
+and `/usr/share` Quadlet paths. `particleos-workload-health.service` rejects
+duplicate unit names, missing health commands, readiness not tied to health,
+inactive generated services, missing containers, and any status other than
+`healthy`. Hosts with no configured workloads pass as an empty generic host;
+once a workload is configured, its real Podman health state gates boot
+blessing.
 
 ## Disk and Update Model
 
 The disk contains an ESP, two `/usr` + verity + verity-signature slot triples,
 and one mutable Btrfs state partition. `systemd-sysupdate` writes only the
-inactive UKI and OS slot. Boot counting retains the previous version until a
-new boot is healthy and blessed.
+inactive UKI and OS slot. Its download timer is paired with an automatic reboot
+timer, so a completed update cannot remain staged indefinitely. Reboot is
+allowed only after the TPM policy for the candidate UKI has been committed.
 
-Persistent state is LUKS2 encrypted and automatically unlocked by a TPM token
-bound to PCR 7. PCR 7 represents enrolled Secure Boot policy instead of one OS
-version, so correctly signed A/B updates do not require resealing. A Secure
-Boot policy change can require recovery and token reenrollment.
+Persistent state is LUKS2 encrypted; systemd-repart creates it with a
+PCR7-bound bootstrap TPM token. Before the first boot can complete,
+`particleos-pcrlock-enroll.service` predicts the current UKI's PCR 11
+measurement, creates a strict PCR 7+11 policy in a local TPM NV index, enrolls
+a new LUKS token, and atomically wipes the bootstrap TPM token. Boot blessing
+requires that migration to finish.
 
-The token deliberately has no public-key PCR 11 dependency. The OBS Secure
-Boot key is RSA-4096, larger than the external RSA key supported by many TPM
-2.0 implementations. The optional NvPCR/pcrlock stack also needs a separate
-TPM-compatible policy-signing key. ParticleOS therefore removes its unused
-NvPCR definitions and masks the associated setup, login, product, and pcrlock
-activation units. Ordinary UKI boot-phase measurements remain enabled.
+After sysupdate installs a candidate, both the running and candidate UKIs are
+verified with the immutable OBS project certificate and temporarily admitted
+to the NV policy. This preserves boot-counted A/B rollback. A successful boot
+is blessed only after system units and configured Quadlet health checks pass;
+the superseded UKI is then removed from the state-unlock policy. An offline
+attacker can still boot an older Secure-Boot-signed UKI, but it cannot unlock
+persistent state after that UKI has been revoked. A Secure Boot or TPM policy
+change can require recovery and token reenrollment.
+
+The OBS Secure Boot key is RSA-4096, larger than the external RSA policy key
+supported by many TPMs. ParticleOS therefore uses systemd-pcrlock's
+machine-local NV authorization instead of publishing an unusable PCR11
+public-key policy. No policy-signing private key is present on the host.
 
 First boot is headless. It performs noninteractive repartitioning and TPM
 enrollment but never blocks for locale, account, or optional recovery-key
@@ -227,11 +263,23 @@ tables. Input, forwarding, and output default to drop. The baseline permits:
 - strict DNS-over-TLS and chrony NTP/NTS for their service users;
 - update HTTPS only from the systemd-sysupdate service cgroup;
 - root-operated TLS registry traffic on ports 443 and 8443; and
-- Podman bridge DNS, outbound forwarding, and established DNAT ingress.
+- Podman bridge access to the host DNS proxy.
 
-The generic host cannot know workload endpoints or published ports. Site
-provisioning should narrow registry/update destinations and add explicit
-destination- and port-specific rules. Do not edit Netavark-generated tables.
+There is no general Podman forwarding rule. Eight empty nftables sets cover
+IPv4/IPv6, TCP/UDP, and ingress/egress. Site provisioning adds exact
+destination-address and destination-port tuples in root-owned files under
+`/etc/particleos/nftables.d/`; anything absent remains denied. For example:
+
+```nftables
+add element inet particleos_filter workload_egress_tcp4 { 192.0.2.10 . 443 }
+add element inet particleos_filter workload_ingress_tcp4 { 10.88.0.8 . 8443 }
+```
+
+Use `workload_egress_{tcp,udp}{4,6}` and
+`workload_ingress_{tcp,udp}{4,6}`. The ingress destination is the post-DNAT
+container address and port. Reload with `systemctl restart nftables`; never
+edit Netavark-generated tables. The generic host cannot know workload
+endpoints, so the factory set membership is deliberately empty.
 
 ## Hardening Review
 
@@ -247,12 +295,12 @@ IPE | Adapt | Kernel-fed objects remain default-deny; `EXECUTE` is delegated to 
 A/B `systemd-sysupdate` | Retain | UKI, `/usr`, verity, and signature update together.
 Separate role/service DDIs | Drop | Workloads are trusted OCI images, not OS roles.
 Installer/live/debug/emergency UKIs | Drop | They expanded the signed attack surface.
-TPM2 state encryption | Adapt | One PCR 7-bound LUKS2/Btrfs partition replaces role-specific layouts.
-PCR11/NvPCR/pcrlock | Drop | A separate TPM-compatible policy-signing key is not present; unusable policy is not implied.
+TPM2 state encryption | Adapt | PCR7 bootstraps one boot, then an NV-backed strict PCR7+11 LUKS token replaces it.
+PCR11/pcrlock rollback control | Adapt | Machine-local TPM NV policy admits current + candidate only, then revokes the superseded UKI after blessing.
 SELinux enforcing | Retain | Fedora targeted policy plus one small host CIL module.
 Broad application SELinux policy | Drop | Mail, database, proxy, DNS, and installer domains have no host role.
-User-namespace prohibition | Adapt | Login/service domains are denied; trusted helpers and `container_runtime_t` retain a quota.
-Ptrace prohibition | Adapt | Yama mode 2 and `deny_ptrace=on` remain; only runtime self-ptrace is allowed for systrap startup.
+User-namespace prohibition | Adapt | Login/service and Podman domains are denied; trusted helpers and `gvisor_t` retain a quota.
+Ptrace prohibition | Adapt | Yama mode 2 and `deny_ptrace=on` remain; only `gvisor_t` self-ptrace is allowed for systrap startup.
 Socket-family restrictions | Retain | Unused host protocols are denied; gVisor implements guest protocols.
 Set-ID removal | Retain | All bits are stripped, then only `unix_chkpwd` is restored.
 Kernel command-line hardening | Retain | Memory, lockdown, signatures, legacy ABI, and initrd fail-closed controls remain.
@@ -262,10 +310,10 @@ Post-boot module lockdown | Retain | Required modules load first, then loading i
 Hardened allocator/no-RLIMIT-AS | Retain | Existing OBS packages are reused.
 SSH hardening | Retain | Modern cryptography, no password/root/forwarding; socket is disabled by default.
 DNS hardening | Retain | DHCP DNS is ignored; strict DNSSEC and DNS-over-TLS are required.
-Default-deny nftables | Adapt | Minimal host and Podman flows are allowed without taking over Netavark tables.
+Default-deny nftables | Adapt | No blanket workload forwarding; exact address/protocol/port sets coexist with Netavark.
 Rootless Podman | Drop | Helpers, mappings, user units, and rootless networking are absent.
 `crun` runtime | Drop | Release-pinned runsc with systrap is the only installed runtime.
-Per-container SELinux MCS | Drop | gVisor does not support it; host runtime confinement remains enforcing.
+Per-container SELinux MCS | Drop | gVisor does not support it; Podman and gVisor use separate enforcing host domains.
 Unsigned/mutable OCI trust | Drop | The initial policy rejects every image until narrow trust is provisioned.
 Role accounts and homed | Drop | Accounts and keys are external provisioning concerns.
 Stalwart/PostgreSQL/nginx roles | Drop | No application packages, credentials, ports, tests, or policy are included.
@@ -303,11 +351,26 @@ RPM plus the existing `hardened_malloc`, `no_rlimit_as`, and separately signed
 
 ## Installation and Provisioning
 
-Verify the OBS checksum and provenance from a separately trusted environment,
-then write the raw image to the whole target disk. Boot UEFI Secure Boot in
-setup mode so systemd-boot can enroll the OBS project certificate carried by
-the image. Leave setup mode and verify Secure Boot before provisioning
-workloads.
+Clone this repository from GitHub through a separately authenticated path and
+verify that the pinned OBS OpenPGP fingerprint is
+`0B2264A151F114677B1D0AAF25688B9E8208EED3`. Do not treat
+`sbverify --list` as authentication. Before writing a disk, run:
+
+```console
+./scripts/validate-artifacts.sh /path/to/obs-artifacts
+```
+
+The validator first verifies the detached OpenPGP signature over the checksum
+digest, then the checksum manifest and every artifact. It extracts the
+project certificate from the signed UKI, pins its SHA-256 fingerprint to
+`F18D066F4D25D63875BB0C370061D75A2AED67E81D33AF11669D79860BB9D2B7`,
+and makes `sbverify --cert` verify the PE signature cryptographically. A
+signature merely being present is not accepted.
+
+Only then write the validated raw image to the whole target disk. Boot UEFI
+Secure Boot in setup mode so systemd-boot can enroll the OBS project
+certificate carried by the image. Leave setup mode and verify Secure Boot
+before provisioning workloads.
 
 After first boot, inspect the host:
 
@@ -315,6 +378,7 @@ After first boot, inspect the host:
 bootctl status
 systemd-analyze image-policy
 systemd-cryptenroll /dev/disk/by-partlabel/ParticleOS-Host-root
+cat /var/lib/systemd/pcrlock.json
 getenforce
 getsebool deny_ptrace
 sysctl kernel.yama.ptrace_scope kernel.modules_disabled
@@ -332,11 +396,13 @@ nft list table inet particleos_filter
 Expect Secure Boot enabled, SELinux `Enforcing`, `deny_ptrace --> on`, Yama
 mode `2`, an active signed IPE policy, encrypted `noexec` root state, read-only
 EROFS `/usr`, runsc with rootless `false`, two A/B slots, no failed units,
-default-drop firewall chains, and `kernel.modules_disabled = 1`.
+empty workload-forwarding sets, default-drop firewall chains, and
+`kernel.modules_disabled = 1`.
 
 Inspect the state token's JSON metadata before relying on automatic unlock. It
-must list PCR 7 under `tpm2-pcrs` and must not contain
-`tpm2-pubkey-pcrs`. Device names vary; resolve them with
+must contain `"tpm2-pcrlock": true`, must not retain a PCR7-only token, and
+`/var/lib/systemd/pcrlock.json` must contain both PCR 7 and PCR 11. Device names
+vary; resolve them with
 `systemd-repart --json=pretty /dev/<disk>` before enrollment operations.
 
 The root account is locked and SSH is disabled. Through a trusted local
@@ -352,20 +418,31 @@ systemctl enable --now sshd.socket
 Do not enable password login, direct root login, agent forwarding, TCP
 forwarding, X11 forwarding, or user Podman services.
 
-## Updates and Recovery
+## Updates and Rollback
 
-List, download, and activate the next signed deployment with:
+The enabled update timer downloads and stages signed deployments; the enabled
+reboot timer activates a fully staged deployment in its maintenance window.
+For an immediate administrator-triggered cycle, use the same guarded units:
 
 ```console
 systemd-sysupdate list
 systemd-sysupdate check-new
-systemd-sysupdate update
-systemctl reboot
+systemctl start systemd-sysupdate-update.service
+systemctl start systemd-sysupdate-reboot.service
 ```
 
-Every remote transfer uses `Verify=yes`. Boot counting keeps the previous slot
-until the new boot is healthy. Investigate a rollback before retrying; never
-manually bless or relabel an unverified slot.
+Every remote transfer uses `Verify=yes`. The update unit verifies both UKIs
+and expands the TPM NV policy before a reboot-ready marker is committed. The
+reboot unit refuses to act without that marker. Boot counting keeps the
+previous slot authorized only while the candidate is unblessed.
+
+Boot completion requires every configured rootful `.container` Quadlet to be
+active and report `healthy`, in addition to systemd's failed-unit check. An
+unhealthy workload reboots without blessing; after the boot-count budget is
+exhausted, systemd-boot selects the previous slot. Once either candidate or
+rollback boot is blessed, `particleos-pcrlock-prune.service` restricts state
+unlock to that booted UKI. Never manually bless, relabel, or copy a UKI around
+the update services.
 
 Keep independently verified signed recovery media and escrow any LUKS recovery
 material under site policy. On suspected host compromise, isolate the machine,
@@ -383,9 +460,13 @@ Validate an OBS artifact directory before deployment:
 ./scripts/validate-artifacts.sh /path/to/artifacts
 ```
 
-The validator checks the published checksum manifest, UKI signature and signed
-command line, manifest contents, versioned verity-signature label, distributable
-GPT, and runtime A/B definitions.
+The validator authenticates the published checksum chain, cryptographically
+verifies the UKI against the pinned certificate, and checks the signed command
+line, manifest contents, versioned verity-signature label, distributable GPT,
+and runtime A/B definitions. The OBS signing-stage extractor separately rejects
+absolute paths, traversal, nested names, links, devices, duplicate entries,
+special mode bits, compression, and size/count abuse before reading repart
+definitions.
 
 For release qualification, first create the disposable signed OCI fixture.
 This step needs `skopeo`, GnuPG, `dosfstools`, and `mtools`; it downloads the
@@ -415,17 +496,19 @@ and starts QEMU/KVM with swtpm. Nothing is installed in the guest. It creates
 sparse temporary state beside the artifacts by default; set `VM_AUDIT_TMPDIR`
 to another writable filesystem when needed.
 
-The first boot validates Secure Boot, signed UKI/dm-verity, PCR7-only LUKS
-enrollment, SELinux/IPE, scoped systrap execution, A/B layout, failed units,
-nftables, module lockdown, rootful Podman, a direct runsc OCI bundle, and the
-default-deny image policy. It then rejects the signed fixture under the wrong
-key, imports it under an exact valid trust rule, and runs the read-only
-container through Podman's default runsc/systrap path. It also checks
-rootless-helper absence, set-ID state, SSH, and DNS. The second boot reuses the
-same disk and TPM state to prove persistent automatic unlock and repeats the
-signed-container test from clean container storage. Both guests power off on
-success or failure, each swtpm process is stopped, and temporary state is
-removed. Success ends with:
+The first boot validates Secure Boot, signed UKI/dm-verity, replacement of the
+PCR7 bootstrap token by the PCR7+11 NV policy, strict credential handling,
+SELinux/IPE, the dedicated live `gvisor_t` domain, A/B layout, workload health,
+automatic update reboot policy, tuple-based forwarding denial, module
+lockdown, administrative runsc modes, rootful Podman, a direct runsc OCI
+bundle, and default-deny image policy. It rejects the signed fixture under the
+wrong key, imports it under an exact valid trust rule, runs the read-only
+container through Podman's default runsc/systrap path, starts a health-gated
+Quadlet, and proves unlisted egress is denied. It also checks rootless-helper
+absence, set-ID state, SSH, and DNS. The second boot reuses the same disk and
+TPM state to prove persistent automatic unlock and repeats the signed-container
+test from clean storage. Both guests power off on success or failure, each
+swtpm process is stopped, and temporary state is removed. Success ends with:
 
 ```text
 PARTICLEOS_VM_AUDIT_PASS
@@ -439,15 +522,16 @@ PARTICLEOS_VM_AUDIT_PASS
   it does not make malicious workloads safe.
 - IPE does not authenticate anonymous executable memory generated by systrap.
   That boundary depends on signed `/usr`, `noexec` state, and SELinux.
-- SELinux cannot label individual processes inside gVisor. Workload separation
-  primarily relies on gVisor, namespaces, cgroups, Podman defaults, and
-  workload-specific limits.
+- SELinux cannot label individual processes inside gVisor. All gVisor host
+  processes share `gvisor_t`; isolation between sandboxes relies primarily on
+  gVisor, namespaces, cgroups, Podman defaults, and workload-specific limits.
 - Availability can be exhausted through CPU, memory, PIDs, namespaces,
   storage, logs, or network unless each workload has explicit limits.
-- PCR 7 binding follows enrolled Secure Boot policy, so every key trusted by
-  firmware is part of the state-unlock trust decision.
-- Root-operated registry egress is broad until site provisioning narrows
-  destinations, and generic firewall policy cannot know application ports.
+- PCR 7 remains part of the NV policy, so every key trusted by firmware remains
+  part of the state-unlock trust decision. PCR 11 prevents an otherwise trusted
+  but superseded UKI from unlocking state after blessing.
+- Root-operated host registry egress remains broad on TLS ports; workload
+  forwarding itself is empty until site policy adds exact tuples.
 - There is no built-in recovery profile; loss of valid recovery material can
   make persistent state unavailable after TPM or Secure Boot policy changes.
 

@@ -1,0 +1,85 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""Extract the tiny repart-definition archive under a hostile-input policy."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import sys
+import tarfile
+
+
+MAX_MEMBERS = 32
+MAX_MEMBER_SIZE = 64 * 1024
+MAX_TOTAL_SIZE = 1024 * 1024
+MAX_ARCHIVE_SIZE = 2 * 1024 * 1024
+
+
+def fail(message: str) -> "NoReturn":
+    raise SystemExit(f"unsafe repart archive: {message}")
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        raise SystemExit(f"usage: {sys.argv[0]} ARCHIVE DESTINATION")
+
+    archive = Path(sys.argv[1])
+    destination = Path(sys.argv[2])
+    archive_size = archive.stat().st_size
+    if not 1 <= archive_size <= MAX_ARCHIVE_SIZE:
+        fail(f"archive size {archive_size} is outside 1..{MAX_ARCHIVE_SIZE}")
+    destination.mkdir(mode=0o700, parents=False, exist_ok=False)
+
+    # OBS emits an uncompressed POSIX tar. Refuse alternate codecs so an input
+    # cannot consume unbounded work before member limits are evaluated.
+    with tarfile.open(archive, mode="r:") as source:
+        members = source.getmembers()
+        if not 1 <= len(members) <= MAX_MEMBERS:
+            fail(f"expected 1..{MAX_MEMBERS} members, found {len(members)}")
+
+        names: set[str] = set()
+        total_size = 0
+        for member in members:
+            path = PurePosixPath(member.name)
+            if not member.isfile():
+                fail(f"{member.name!r} is not a regular file")
+            if path.is_absolute() or path.name != member.name or ".." in path.parts:
+                fail(f"{member.name!r} is not a top-level basename")
+            if not member.name.endswith(".conf") or member.name.startswith("."):
+                fail(f"{member.name!r} is not a public .conf file")
+            if member.name in names:
+                fail(f"duplicate member {member.name!r}")
+            if member.size < 1 or member.size > MAX_MEMBER_SIZE:
+                fail(f"{member.name!r} has invalid size {member.size}")
+            if member.mode & 0o7000:
+                fail(f"{member.name!r} carries special mode bits")
+            names.add(member.name)
+            total_size += member.size
+
+        if total_size > MAX_TOTAL_SIZE:
+            fail(f"expanded data exceeds {MAX_TOTAL_SIZE} bytes")
+
+        destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for member in members:
+                stream = source.extractfile(member)
+                if stream is None:
+                    fail(f"cannot read {member.name!r}")
+                output_fd = os.open(
+                    member.name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=destination_fd,
+                )
+                with stream, os.fdopen(output_fd, "wb") as output:
+                    shutil.copyfileobj(stream, output, length=64 * 1024)
+                    if output.tell() != member.size:
+                        fail(f"{member.name!r} changed size while reading")
+        finally:
+            os.close(destination_fd)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,36 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+declare -A units=()
+for directory in \
+    /run/containers/systemd \
+    /etc/containers/systemd \
+    /usr/share/containers/systemd; do
+    [[ -d $directory ]] || continue
+    while IFS= read -r -d '' quadlet; do
+        unit=${quadlet##*/}
+        unit=${unit%.container}.service
+        [[ -z ${units[$unit]+set} ]] || {
+            echo "duplicate rootful Quadlet unit: $unit" >&2
+            exit 1
+        }
+        units[$unit]=$quadlet
+    done < <(find "$directory" -maxdepth 1 -type f -name '*.container' -print0)
+done
+
+for unit in "${!units[@]}"; do
+    quadlet=${units[$unit]}
+    health_cmd=$(sed -n '/^\[Container\]$/,/^\[/s/^HealthCmd=//p' "$quadlet" | tail -n1)
+    notify=$(sed -n '/^\[Container\]$/,/^\[/s/^Notify=//p' "$quadlet" | tail -n1)
+    [[ -n $health_cmd && $health_cmd != none && $notify == healthy ]] || {
+        echo "$quadlet must set HealthCmd= and Notify=healthy" >&2
+        exit 1
+    }
+    systemctl is-active --quiet "$unit"
+    mapfile -t containers < <(
+        podman ps --filter "label=PODMAN_SYSTEMD_UNIT=$unit" --format '{{.ID}}'
+    )
+    [[ ${#containers[@]} -eq 1 ]]
+    [[ $(podman inspect --format '{{.State.Health.Status}}' "${containers[0]}") == healthy ]]
+done

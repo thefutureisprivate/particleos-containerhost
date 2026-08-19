@@ -22,11 +22,22 @@ manifest="$(one_artifact 'ParticleOS-Host_*.manifest.gz')"
 os_release="$(one_artifact 'ParticleOS-Host_*.osrelease')"
 repart_archive="$(one_artifact 'ParticleOS-Host_*.repart.tar')"
 checksum_manifest="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS')"
+checksum_digest="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS.sha256')"
+checksum_signature="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS.sha256.asc')"
 scratch="$(mktemp -d /tmp/particleos-artifacts.XXXXXX)"
 trap 'rm -rf -- "${scratch:?}"' EXIT
 
+trusted_key="$repository/mkosi.resources/particleos-obs-pubkey.gpg"
+expected_key_fingerprint=0B2264A151F114677B1D0AAF25688B9E8208EED3
+actual_key_fingerprint=$(gpg --batch --show-keys --with-colons "$trusted_key" |
+    sed -n 's/^fpr:::::::::\([^:]*\):$/\1/p' | head -n1)
+[[ $actual_key_fingerprint == "$expected_key_fingerprint" ]]
+gpg --batch --yes --dearmor --output "$scratch/trusted-keyring.gpg" "$trusted_key"
+gpgv --keyring "$scratch/trusted-keyring.gpg" \
+    "$checksum_signature" "$checksum_digest"
 (
     cd "$directory"
+    sha256sum -c "${checksum_digest##*/}"
     sha256sum -c "${checksum_manifest##*/}"
 )
 mapfile -t checksummed_names < <(
@@ -41,7 +52,6 @@ mapfile -t published_names < <(
 [[ ${#checksummed_names[@]} -eq ${#published_names[@]} ]]
 [[ $(printf '%s\n' "${checksummed_names[@]}") == $(printf '%s\n' "${published_names[@]}") ]]
 
-sbverify --list "$uki" | grep -q 'signature certificates'
 uki_details="$(ukify inspect "$uki")"
 for setting in \
     'audit=1' \
@@ -49,6 +59,7 @@ for setting in \
     'ipe.enforce=1' \
     'module.sig_enforce=1' \
     'lockdown=confidentiality' \
+    'systemd.credentials_boot_policy=strict' \
     'systemd.verity_usr_options=root-hash-signature=auto'; do
     grep -qF "$setting" <<<"$uki_details"
 done
@@ -62,16 +73,24 @@ zgrep -q '"name": "podman"' "$manifest"
 objcopy --dump-section ".initrd=$scratch/initrd" "$uki" "$scratch/uki.copy"
 lsinitrd "$scratch/initrd" >"$scratch/initrd.list"
 grep -qE ' etc/ipe/ipe-policy\.p7b$' "$scratch/initrd.list"
+lsinitrd --file usr/lib/verity.d/_projectcert.crt "$scratch/initrd" \
+    >"$scratch/project-cert.crt"
+expected_certificate_fingerprint=F18D066F4D25D63875BB0C370061D75A2AED67E81D33AF11669D79860BB9D2B7
+actual_certificate_fingerprint=$(openssl x509 -in "$scratch/project-cert.crt" \
+    -noout -fingerprint -sha256 | sed 's/^.*=//; s/://g')
+[[ $actual_certificate_fingerprint == "$expected_certificate_fingerprint" ]]
+sbverify --cert "$scratch/project-cert.crt" "$uki"
 
 image_id="$(sed -n 's/^IMAGE_ID=//p' "$os_release" | tr -d '"')"
 image_version="$(sed -n 's/^IMAGE_VERSION=//p' "$os_release" | tr -d '"')"
 [[ "$image_id" == ParticleOS-Host && "$image_version" =~ ^[0-9]+\.[0-9]+$ ]]
 
-tar -xf "$repart_archive" -C "$scratch"
-mapfile -t build_definitions < <(find "$scratch" -maxdepth 1 -type f -name '*.conf')
+definitions="$scratch/repart"
+"$repository/mkosi.scripts/repart-archive" "$repart_archive" "$definitions"
+mapfile -t build_definitions < <(find "$definitions" -maxdepth 1 -type f -name '*.conf')
 [[ ${#build_definitions[@]} -eq 4 ]]
-grep -RqxF 'Type=usr-verity-sig' "$scratch"
-grep -RqxF "Label=${image_id}_${image_version}_vsig" "$scratch"
+grep -RqxF 'Type=usr-verity-sig' "$definitions"
+grep -RqxF "Label=${image_id}_${image_version}_vsig" "$definitions"
 
 # The distributable image contains the signed active slot. systemd-repart adds
 # the empty alternate slot and encrypted state partition on first boot. Read
@@ -121,4 +140,4 @@ grep -qxF 'Type=root' "$runtime/40-root.conf"
 grep -qxF 'Encrypt=tpm2' "$runtime/40-root.conf"
 grep -qxF 'TPM2PCRs=7' "$runtime/40-root.conf"
 
-echo 'Checksums, signed UKI, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'
+echo 'Authenticated checksums, verified UKI, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'

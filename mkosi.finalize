@@ -13,7 +13,6 @@ for unit in \
     systemd-homed.service \
     systemd-homed-firstboot.service \
     systemd-tpm2-setup-early.service \
-    systemd-tpm2-setup.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
     systemd-pcrproduct.service \
@@ -77,7 +76,9 @@ fi
 [[ -x "$BUILDROOT/usr/bin/podman" ]]
 chmod 0750 "$BUILDROOT/usr/bin/podman"
 [[ -x "$BUILDROOT/usr/libexec/gvisor/runsc" ]]
-chmod 0755 "$BUILDROOT/usr/libexec/gvisor/runsc"
+chmod 0750 "$BUILDROOT/usr/libexec/gvisor/runsc"
+find "$BUILDROOT/usr/libexec/gvisor/gvisor-bin" -maxdepth 1 -type f \
+    -exec chmod 0750 -- {} +
 
 # Capture immutable vendor configuration and construct the initial encrypted
 # root skeleton copied by systemd-repart on first boot.

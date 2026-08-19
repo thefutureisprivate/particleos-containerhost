@@ -1,0 +1,23 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+state=/dev/disk/by-partlabel/ParticleOS-Host-root
+marker=/var/lib/particleos/pcrlock-enrolled
+[[ -b $state && ! -e $marker ]]
+
+/usr/lib/particleos/pcrlock-refresh current
+/usr/bin/systemd-cryptenroll \
+    --unlock-tpm2-device=auto \
+    --tpm2-device=auto \
+    --tpm2-pcrs= \
+    --tpm2-pcrlock=/var/lib/systemd/pcrlock.json \
+    --wipe-slot=tpm2 \
+    "$state"
+
+metadata=$(cryptsetup luksDump --dump-json-metadata "$state")
+compact=${metadata//[[:space:]]/}
+[[ $compact == *'"tpm2-pcrlock":true'* ]]
+[[ $compact != *'"tpm2-pcrs":[7]'* ]]
+install -d -m 0700 /var/lib/particleos
+install -m 0600 /dev/null "$marker"

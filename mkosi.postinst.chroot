@@ -53,7 +53,7 @@ semodule -X 300 -i \
 selinux_local_contexts=/etc/selinux/targeted/contexts/files/file_contexts.local
 for local_context in \
     '/etc/selinux -l system_u:object_r:etc_t:s0' \
-    '/usr/libexec/gvisor(/.*)? -- system_u:object_r:container_runtime_exec_t:s0'; do
+    '/usr/libexec/gvisor(/.*)? -- system_u:object_r:gvisor_exec_t:s0'; do
     if ! grep -Fqx "$local_context" "$selinux_local_contexts"; then
         printf '%s\n' "$local_context" >>"$selinux_local_contexts"
     fi
@@ -74,10 +74,10 @@ find /usr/lib/pam.d -mindepth 1 -type f -exec sed --in-place \
 ln --symbolic --force multi-user.target /usr/lib/systemd/system/default.target
 install --directory --owner=root --group=root --mode=0700 /var/lib/containers
 
-# Podman is an administrative, rootful-only interface. runsc remains 0755
-# because it deliberately re-executes its sandbox sidecars without privilege.
-chmod 0750 /usr/bin/podman
-chmod 0755 /usr/libexec/gvisor/runsc /usr/libexec/gvisor/gvisor-bin/*
+# Podman and every direct gVisor entry point are administrative interfaces.
+# Runtime children inherit root ownership before runsc changes guest identity.
+chmod 0750 /usr/bin/podman \
+    /usr/libexec/gvisor/runsc /usr/libexec/gvisor/gvisor-bin/*
 
 (
     # shellcheck source=/dev/null
