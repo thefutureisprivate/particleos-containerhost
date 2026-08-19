@@ -186,15 +186,25 @@ fi
 runsc=/usr/libexec/gvisor/runsc
 if "$runsc" --version | grep -qF 'release-20260810.0'; then pass 'the pinned gVisor release is installed'; else fail 'the pinned gVisor release is installed'; fi
 
-install -d -m 0700 /run/particleos-runsc-audit/root /run/particleos-runsc-audit/bundle
-ln -sfn /usr /run/particleos-runsc-audit/bundle/rootfs
+install -d -m 0700 \
+    /run/particleos-runsc-audit/root \
+    /run/particleos-runsc-audit/bundle \
+    /run/particleos-runsc-audit/bundle/rootfs
+mapfile -t true_dependencies < <(
+    ldd /usr/bin/true | sed -nE \
+        -e 's@.*=> (/[^ ]+).*@\1@p' \
+        -e 's@^[[:space:]]*(/[^ ]+).*@\1@p'
+)
+cp --dereference --parents -- \
+    /usr/bin/true "${true_dependencies[@]}" \
+    /run/particleos-runsc-audit/bundle/rootfs
 cat >/run/particleos-runsc-audit/bundle/config.json <<'JSON'
 {
   "ociVersion": "1.0.2",
   "process": {
     "terminal": false,
     "user": {"uid": 0, "gid": 0},
-    "args": ["/bin/true"],
+    "args": ["/usr/bin/true"],
     "env": ["PATH=/bin:/usr/bin"],
     "cwd": "/",
     "noNewPrivileges": true

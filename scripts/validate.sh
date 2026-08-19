@@ -161,6 +161,11 @@ require_fixed '--debug-log="$runsc_log" --platform=systrap' tests/vm-audit.sh 'V
 require_fixed 'PARTICLEOS_VM_AUDIT_PASS' tests/vm-audit.sh 'VM audit has an unambiguous success marker'
 require_fixed 'kernel.yama.ptrace_scope' tests/vm-audit.sh 'VM audit verifies the systrap-compatible Yama boundary'
 require_fixed 'getsebool deny_ptrace' tests/vm-audit.sh 'VM audit verifies the global SELinux ptrace restriction'
+require_fixed 'io.systemd.stub.kernel-cmdline-extra=systemd.wants=vm-audit.service' tests/run-vm-audit.sh 'VM runner requests the injected audit unit'
+require_fixed 'run_boot 1' tests/run-vm-audit.sh 'VM runner audits fresh TPM enrollment'
+require_fixed 'run_boot 2' tests/run-vm-audit.sh 'VM runner audits persistent TPM unlock'
+require_fixed 'stop_tpm' tests/run-vm-audit.sh 'VM runner stops its TPM emulator after every boot'
+require_fixed 'zstd --sparse' tests/run-vm-audit.sh 'VM runner preserves sparse disk allocation'
 
 service=.obs/runsc/_service
 require_fixed 'release/20260810.0/x86_64/gvisor.tar.bz2' "$service" 'gVisor release archive is pinned'
@@ -176,6 +181,22 @@ reject_fixed 'PCR policy signing requires' mkosi.scripts/obs-build 'obsolete PCR
 require_fixed 'sha256sum -- "${artifact_names[@]}"' mkosi.scripts/obs-build 'checksums are regenerated after final signed artifacts are staged'
 # shellcheck disable=SC2016
 require_fixed 'sha256sum -c "${checksum_manifest##*/}"' scripts/validate-artifacts.sh 'artifact validation verifies the published checksum manifest'
+require_fixed 'etc/ipe/ipe-policy\.p7b' scripts/validate-artifacts.sh 'artifact validation inspects the signed UKI for the IPE policy'
+
+for section in \
+    '## Architecture' \
+    '## Security and Hardening' \
+    '## Hardening Review' \
+    '## Installation and Provisioning' \
+    '## Diagnostics and Tests' \
+    '## Residual Risks'; do
+    require_fixed "$section" README.md "README contains ${section#\#\# }"
+done
+if [[ -e TODO ]] || find docs -type f -print -quit 2>/dev/null | grep -q .; then
+    fail 'README is the sole project documentation file'
+else
+    pass 'README is the sole project documentation file'
+fi
 
 python3 - <<'PY' || failures=$((failures + 1))
 import xml.etree.ElementTree as ET

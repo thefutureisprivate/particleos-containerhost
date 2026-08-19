@@ -22,6 +22,8 @@ manifest="$(one_artifact 'ParticleOS-Host_*.manifest.gz')"
 os_release="$(one_artifact 'ParticleOS-Host_*.osrelease')"
 repart_archive="$(one_artifact 'ParticleOS-Host_*.repart.tar')"
 checksum_manifest="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS')"
+scratch="$(mktemp -d /tmp/particleos-artifacts.XXXXXX)"
+trap 'rm -rf -- "${scratch:?}"' EXIT
 
 (
     cd "$directory"
@@ -57,14 +59,14 @@ fi
 gzip -t "$manifest"
 zgrep -q '"name": "runsc"' "$manifest"
 zgrep -q '"name": "podman"' "$manifest"
-zgrep -q '"name": "ipe-policy-containerhost"' "$manifest"
+objcopy --dump-section ".initrd=$scratch/initrd" "$uki" "$scratch/uki.copy"
+lsinitrd "$scratch/initrd" >"$scratch/initrd.list"
+grep -qE ' etc/ipe/ipe-policy\.p7b$' "$scratch/initrd.list"
 
 image_id="$(sed -n 's/^IMAGE_ID=//p' "$os_release" | tr -d '"')"
 image_version="$(sed -n 's/^IMAGE_VERSION=//p' "$os_release" | tr -d '"')"
 [[ "$image_id" == ParticleOS-Host && "$image_version" =~ ^[0-9]+\.[0-9]+$ ]]
 
-scratch="$(mktemp -d /tmp/particleos-artifacts.XXXXXX)"
-trap 'rm -rf -- "${scratch:?}"' EXIT
 tar -xf "$repart_archive" -C "$scratch"
 mapfile -t build_definitions < <(find "$scratch" -maxdepth 1 -type f -name '*.conf')
 [[ ${#build_definitions[@]} -eq 4 ]]
