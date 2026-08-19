@@ -46,10 +46,16 @@ done
 require_fixed 'Encrypt=tpm2' mkosi.extra/usr/lib/repart.d/40-root.conf 'persistent state is TPM2 encrypted'
 require_fixed 'TPM2PCRs=7' mkosi.extra/usr/lib/repart.d/40-root.conf 'state is bound to Secure Boot policy'
 require_fixed 'ipe-policy-containerhost' mkosi.conf 'the systrap-compatible signed IPE policy is selected'
+require_fixed 'ipe-policy-containerhost' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS stages the systrap-compatible IPE policy'
 if grep -qxF '        ipe-policy' mkosi.conf; then
     fail 'the incompatible generic IPE package is not selected'
 else
     pass 'the incompatible generic IPE package is not selected'
+fi
+if grep -qxF '        ipe-policy' .obs/particleos-containerhost/x86-64/mkosi.conf; then
+    fail 'OBS does not stage the incompatible generic IPE package'
+else
+    pass 'OBS does not stage the incompatible generic IPE package'
 fi
 ipe_policy=.obs/ipe-policy-containerhost/ipe-policy
 require_fixed 'DEFAULT action=DENY' "$ipe_policy" 'IPE denies unmatched kernel-fed objects'
