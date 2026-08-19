@@ -18,6 +18,10 @@
   (deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t
     (file (entrypoint execute execute_no_trans)))
 
+  ; Yama mode 2 and deny_ptrace remain active. Systrap needs one same-domain
+  ; ptrace operation to initialize executor children, so grant only that edge.
+  (allow .container_runtime_t self (process (ptrace)))
+
   (typeattribute userns_privileged_domain)
   (typeattributeset userns_privileged_domain
     (.init_t .kernel_t .systemd_importd_t .container_runtime_t))

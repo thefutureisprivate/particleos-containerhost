@@ -61,10 +61,21 @@ if [[ $(getenforce) == Enforcing ]]; then pass 'SELinux is enforcing'; else fail
 selinux_policy=/usr/lib/particleos/selinux/particleos-containerhost.cil
 if grep -qxF '  (typeattributeset anonymous_exec_privileged_domain (.container_runtime_t))' "$selinux_policy" &&
         grep -qxF '  (deny anonymous_exec_restricted_domain self (process (execmem execstack)))' "$selinux_policy" &&
-        grep -qxF '  (deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy"; then
+        grep -qxF '  (deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy" &&
+        grep -qxF '  (allow .container_runtime_t self (process (ptrace)))' "$selinux_policy"; then
     pass 'SELinux reserves executable anonymous memory for the gVisor runtime'
 else
     fail 'SELinux reserves executable anonymous memory for the gVisor runtime'
+fi
+if [[ $(sysctl -n kernel.yama.ptrace_scope) == 2 ]]; then
+    pass 'Yama restricts ptrace to CAP_SYS_PTRACE'
+else
+    fail 'Yama restricts ptrace to CAP_SYS_PTRACE'
+fi
+if getsebool deny_ptrace 2>/dev/null | grep -q -- '--> on'; then
+    pass 'SELinux globally denies ptrace outside explicit policy'
+else
+    fail 'SELinux globally denies ptrace outside explicit policy'
 fi
 
 usr_type=$(findmnt -n -o FSTYPE /usr 2>/dev/null || true)
@@ -204,11 +215,16 @@ cat >/run/particleos-runsc-audit/bundle/config.json <<'JSON'
   }
 }
 JSON
-if "$runsc" --platform=systrap --root=/run/particleos-runsc-audit/root run \
+runsc_log=/run/particleos-runsc-audit/runsc.log
+if "$runsc" --debug --debug-log="$runsc_log" --platform=systrap \
+        --root=/run/particleos-runsc-audit/root run \
         --bundle=/run/particleos-runsc-audit/bundle particleos-audit; then
     pass 'runsc executes an OCI bundle with systrap'
 else
     "$runsc" --root=/run/particleos-runsc-audit/root delete --force particleos-audit 2>/dev/null || true
+    tail -240 "$runsc_log" 2>/dev/null || true
+    journalctl --boot --no-pager 2>/dev/null |
+        grep -Ei 'avc:|denied|ipe|runsc|systrap' | tail -160 || true
     fail 'runsc executes an OCI bundle with systrap'
 fi
 

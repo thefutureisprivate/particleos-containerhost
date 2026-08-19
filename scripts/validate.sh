@@ -69,6 +69,7 @@ selinux_policy=mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.c
 require_fixed '(typeattributeset anonymous_exec_privileged_domain (.container_runtime_t))' "$selinux_policy" 'SELinux reserves anonymous execution for the gVisor runtime'
 require_fixed '(deny anonymous_exec_restricted_domain self (process (execmem execstack)))' "$selinux_policy" 'SELinux denies executable anonymous memory outside the runtime'
 require_fixed '(deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy" 'SELinux denies systrap-style tmpfs entrypoints outside the runtime'
+require_fixed '(allow .container_runtime_t self (process (ptrace)))' "$selinux_policy" 'SELinux permits only the runtime self-ptrace needed by systrap'
 if ! grep -RqsE '^Type=(home|swap)$' mkosi.extra/usr/lib/repart.d; then
     pass 'no unencrypted home or swap partition exists'
 else
@@ -106,6 +107,8 @@ done
 require_fixed '/usr/lib/systemd/user/podman.service' mkosi.conf 'rootless Podman service is removed'
 require_fixed '/usr/lib/systemd/user/podman.socket' mkosi.conf 'rootless Podman socket is removed'
 require_fixed 'kernel.unprivileged_userns_clone = 0' mkosi.extra/usr/lib/sysctl.d/70-particleos-hardening.conf 'unprivileged user namespaces are disabled'
+require_fixed 'kernel.yama.ptrace_scope = 2' mkosi.extra/usr/lib/sysctl.d/70-particleos-hardening.conf 'Yama requires CAP_SYS_PTRACE for systrap initialization'
+require_fixed 'setsebool -P deny_ptrace=on' mkosi.postinst.chroot 'SELinux denies ptrace globally outside explicit policy'
 require_fixed '(deny userns_restricted_domain self (user_namespace (create)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'SELinux denies user namespaces by default'
 require_fixed '.container_runtime_t' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'gVisor runtime domain has the narrow namespace exception'
 require_fixed '(allow .initrc_t .container_runtime_t (process2 (nosuid_transition)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'system services may enter the confined runtime from authenticated /usr'
@@ -150,10 +153,14 @@ require_fixed 'nft_hash' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nft
 require_fixed 'nft_limit' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables rate limiting loads before module lockdown'
 reject_fixed 'nft delete table inet particleos_filter' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall startup has no expected deletion error'
 require_fixed 'LoadCredential=vm-audit' tests/vm-audit.service 'VM audit is injected without modifying the image'
+require_fixed 'SuccessAction=poweroff' tests/vm-audit.service 'successful VM audits power off the guest'
+require_fixed 'FailureAction=poweroff' tests/vm-audit.service 'failed VM audits power off the guest'
 # Literal implementation string, not an expression for this validator.
 # shellcheck disable=SC2016
-require_fixed '"$runsc" --platform=systrap' tests/vm-audit.sh 'VM audit executes the packaged runtime with a real systrap sandbox'
+require_fixed '--debug-log="$runsc_log" --platform=systrap' tests/vm-audit.sh 'VM audit executes the packaged runtime with a real systrap sandbox'
 require_fixed 'PARTICLEOS_VM_AUDIT_PASS' tests/vm-audit.sh 'VM audit has an unambiguous success marker'
+require_fixed 'kernel.yama.ptrace_scope' tests/vm-audit.sh 'VM audit verifies the systrap-compatible Yama boundary'
+require_fixed 'getsebool deny_ptrace' tests/vm-audit.sh 'VM audit verifies the global SELinux ptrace restriction'
 
 service=.obs/runsc/_service
 require_fixed 'release/20260810.0/x86_64/gvisor.tar.bz2' "$service" 'gVisor release archive is pinned'
