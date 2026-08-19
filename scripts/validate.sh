@@ -240,13 +240,19 @@ require_fixed 'BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-r
 python3 tests/test-repart-archive-policy.py && pass 'hostile repart archive cases are rejected' || failures=$((failures + 1))
 
 for section in \
+    '## Purpose' \
+    '## ParticleOS Baseline' \
+    '## Changes from ParticleOS' \
     '## Architecture' \
     '## Security and Hardening' \
-    '## Hardening Review' \
     '## Installation and Provisioning' \
     '## Diagnostics and Tests' \
     '## Residual Risks'; do
     require_fixed "$section" README.md "README contains ${section#\#\# }"
+done
+reject_fixed 'custom-particleos' README.md 'README describes only the upstream ParticleOS baseline and this image'
+for retired_name in Stalwart PostgreSQL nginx; do
+    reject_fixed "$retired_name" README.md "README does not inventory retired ${retired_name} roles"
 done
 if [[ -e TODO ]] || find docs -type f -print -quit 2>/dev/null | grep -q .; then
     fail 'README is the sole project documentation file'
