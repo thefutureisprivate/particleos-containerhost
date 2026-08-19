@@ -68,7 +68,7 @@
   ; Sandbox sizing reads host memory totals before gVisor enters its isolated
   ; procfs. The generic proc type is read-only here; no write or setattr edge
   ; is granted to the runtime.
-  (allow .gvisor_t .proc_t (file (read)))
+  (allow .gvisor_t .proc_t (file (getattr open read)))
 
   ; systemd v261 creates the legacy udev control path as a symlink to its
   ; Varlink socket. Permit PID 1 to create only that policy-typed link class.

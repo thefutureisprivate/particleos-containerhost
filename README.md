@@ -496,15 +496,17 @@ variables, attaches the fixture read-only, decompresses a disposable 16-GiB
 disk, injects `vm-audit.service` and the audit script as system credentials,
 and starts QEMU/KVM with swtpm. Nothing is installed in the guest. It creates
 sparse temporary state beside the artifacts by default; set `VM_AUDIT_TMPDIR`
-to another writable filesystem when needed.
+to another writable filesystem when needed. Set `VM_AUDIT_KEEP_FAILED=1` to
+preserve a failed guest disk and its logs for diagnosis; QEMU and swtpm are
+still stopped.
 
 The first boot validates Secure Boot, signed UKI/dm-verity, replacement of the
 PCR7 bootstrap token by the PCR7+11 NV policy, strict credential handling,
 SELinux/IPE, the dedicated live `gvisor_t` domain, A/B layout, workload health,
 automatic update reboot policy, tuple-based forwarding denial, module
-lockdown, administrative runsc modes, rootful Podman, a direct runsc OCI
-bundle, and default-deny image policy. It rejects the signed fixture under the
-wrong key, imports it under an exact valid trust rule, runs the read-only
+lockdown, administrative runsc modes, rootful Podman, and default-deny image
+policy. It rejects the signed fixture under the wrong key, imports it under an
+exact valid trust rule, runs the read-only
 container through Podman's default runsc/systrap path, starts a health-gated
 Quadlet, and proves unlisted egress is denied. It also checks rootless-helper
 absence, set-ID state, SSH, and DNS. The second boot reuses the same disk and

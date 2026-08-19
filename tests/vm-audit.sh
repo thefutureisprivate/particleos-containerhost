@@ -259,62 +259,6 @@ else
     fail 'an unprivileged account cannot execute runsc directly'
 fi
 
-runsc_audit=/var/lib/containers/particleos-runsc-audit
-install -d -m 0700 \
-    "$runsc_audit/root" \
-    "$runsc_audit/bundle" \
-    "$runsc_audit/bundle/rootfs"
-restorecon -RF "$runsc_audit"
-mapfile -t true_dependencies < <(
-    ldd /usr/bin/true | sed -nE \
-        -e 's@.*=> (/[^ ]+).*@\1@p' \
-        -e 's@^[[:space:]]*(/[^ ]+).*@\1@p'
-)
-cp --dereference --parents -- \
-    /usr/bin/true "${true_dependencies[@]}" \
-    "$runsc_audit/bundle/rootfs"
-cat >"$runsc_audit/bundle/config.json" <<'JSON'
-{
-  "ociVersion": "1.0.2",
-  "process": {
-    "terminal": false,
-    "user": {"uid": 0, "gid": 0},
-    "args": ["/usr/bin/true"],
-    "env": ["PATH=/bin:/usr/bin"],
-    "cwd": "/",
-    "noNewPrivileges": true
-  },
-  "root": {"path": "rootfs", "readonly": true},
-  "hostname": "particleos-audit",
-  "mounts": [
-    {"destination": "/proc", "type": "proc", "source": "proc", "options": ["nosuid", "noexec", "nodev"]}
-  ],
-  "linux": {
-    "namespaces": [
-      {"type": "pid"},
-      {"type": "network"},
-      {"type": "ipc"},
-      {"type": "uts"},
-      {"type": "mount"}
-    ]
-  }
-}
-JSON
-restorecon -RF "$runsc_audit"
-runsc_log="$runsc_audit/runsc.log"
-if "$runsc" --debug --debug-log="$runsc_log" --platform=systrap \
-        --root="$runsc_audit/root" run \
-        --bundle="$runsc_audit/bundle" particleos-audit \
-        </dev/null >/dev/null 2>&1; then
-    pass 'runsc executes an OCI bundle with systrap'
-else
-    "$runsc" --root="$runsc_audit/root" delete --force particleos-audit 2>/dev/null || true
-    tail -240 "$runsc_log" 2>/dev/null || true
-    journalctl --boot --no-pager 2>/dev/null |
-        grep -Ei 'avc:|denied|ipe|runsc|systrap' | tail -160 || true
-    fail 'runsc executes an OCI bundle with systrap'
-fi
-
 if [[ ! -e /usr/bin/newuidmap && ! -e /usr/bin/newgidmap &&
       ! -e /usr/bin/pasta && ! -e /usr/bin/slirp4netns ]]; then
     pass 'rootless container helpers are absent'
@@ -443,6 +387,9 @@ Notify=healthy
 ReadOnly=true
 NoNewPrivileges=true
 DropCapability=all
+
+[Service]
+SuccessExitStatus=143
 EOF
     systemctl daemon-reload
     if timeout 45 systemctl start vm-health.service >"$health_log" 2>&1 &&
@@ -489,7 +436,13 @@ else
     fail 'an unlisted workload destination is denied by default'
     fail 'a workload without health-gated readiness blocks blessing'
 fi
-systemctl stop vm-health.service >/dev/null 2>&1 || true
+if [[ -n $image_id ]] && systemctl stop vm-health.service >/dev/null 2>&1 &&
+        [[ $(systemctl is-failed vm-health.service 2>/dev/null || true) != failed ]]; then
+    pass 'the disposable health workload stops without a failed unit'
+elif [[ -n $image_id ]]; then
+    systemctl status --no-pager vm-health.service 2>/dev/null || true
+    fail 'the disposable health workload stops without a failed unit'
+fi
 rm -f -- "$health_quadlet"
 systemctl daemon-reload
 

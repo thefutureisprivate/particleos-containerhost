@@ -15,9 +15,14 @@ ovmf_code=${4:-/usr/share/qemu/ovmf-x86_64-smm-code.bin}
 ovmf_code=$(realpath "$ovmf_code")
 audit_timeout=${VM_AUDIT_TIMEOUT:-300}
 audit_tmpdir=${VM_AUDIT_TMPDIR:-$artifact_directory}
+keep_failed=${VM_AUDIT_KEEP_FAILED:-0}
 
 [[ $audit_timeout =~ ^[1-9][0-9]*$ ]] || {
     echo 'VM_AUDIT_TIMEOUT must be a positive number of seconds' >&2
+    exit 2
+}
+[[ $keep_failed == 0 || $keep_failed == 1 ]] || {
+    echo 'VM_AUDIT_KEEP_FAILED must be 0 or 1' >&2
     exit 2
 }
 [[ -r /dev/kvm && -w /dev/kvm ]] || {
@@ -91,7 +96,9 @@ cleanup() {
         stop_qemu
     fi
     stop_tpm
-    if [[ -n ${scratch:-} && -d $scratch &&
+    if ((status != 0)) && [[ $keep_failed == 1 ]]; then
+        echo "Preserved failed VM audit state: $scratch" >&2
+    elif [[ -n ${scratch:-} && -d $scratch &&
             ${scratch##*/} == .particleos-vm-audit.* ]]; then
         rm -rf -- "$scratch"
     fi
