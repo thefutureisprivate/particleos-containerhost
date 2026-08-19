@@ -137,7 +137,7 @@ for specification in \
 done
 check 'systemd-sysupdate can enumerate the A/B deployment' systemd-sysupdate list
 if [[ $(stat -c '%C' /usr/lib/systemd/import-pubring.pgp 2>/dev/null) == \
-        system_u:object_r:systemd_importd_var_lib_t:s0 ]]; then
+        system_u:object_r:particleos_import_key_t:s0 ]]; then
     pass 'the immutable update trust key has an importd-readable label'
 else
     fail 'the immutable update trust key has an importd-readable label'

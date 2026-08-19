@@ -4,6 +4,7 @@
 ; confined rootful gVisor runtime.
 (type gvisor_t)
 (type gvisor_exec_t)
+(type particleos_import_key_t)
 
 (block particleos_containerhost
   ; Podman remains in Fedora's container_runtime_t. Only the gVisor binaries
@@ -15,6 +16,7 @@
   (typeattributeset .container_runtime_domain (.gvisor_t))
   (typeattributeset .file_type (.gvisor_exec_t))
   (typeattributeset .exec_type (.gvisor_exec_t))
+  (typeattributeset .file_type (.particleos_import_key_t))
 
   (typeattribute gvisor_launcher_domain)
   (typeattributeset gvisor_launcher_domain
@@ -71,6 +73,11 @@
   ; systemd v261 creates the legacy udev control path as a symlink to its
   ; Varlink socket. Permit PID 1 to create only that policy-typed link class.
   (allow .init_t .udev_var_run_t (lnk_file (create)))
+
+  ; The one immutable OpenPGP key used for update metadata has its own type.
+  ; importd may consume it, but cannot modify, relabel, or replace it.
+  (allow .systemd_importd_t .particleos_import_key_t
+    (file (getattr open read map)))
 
   ; The authenticated /usr partition is mounted nosuid. Preserve only the
   ; existing Fedora daemon and login transitions required by this host.
