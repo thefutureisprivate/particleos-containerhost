@@ -293,7 +293,8 @@ restorecon -RF "$runsc_audit"
 runsc_log="$runsc_audit/runsc.log"
 if "$runsc" --debug --debug-log="$runsc_log" --platform=systrap \
         --root="$runsc_audit/root" run \
-        --bundle="$runsc_audit/bundle" particleos-audit; then
+        --bundle="$runsc_audit/bundle" particleos-audit \
+        </dev/null >/dev/null 2>&1; then
     pass 'runsc executes an OCI bundle with systrap'
 else
     "$runsc" --root="$runsc_audit/root" delete --force particleos-audit 2>/dev/null || true
@@ -383,10 +384,13 @@ else
 fi
 
 if [[ -n $image_id ]] && timeout 90 podman run \
+        --detach \
         --name particleos-podman-audit \
         --pull=never \
         "$image_id" /bin/sh -c 'printf PARTICLEOS_PODMAN_RUNSC_OK' \
-        >"$container_log" 2>&1; then
+        >/dev/null 2>&1 &&
+        [[ $(timeout 30 podman wait particleos-podman-audit 2>/dev/null) == 0 ]] &&
+        podman logs particleos-podman-audit >"$container_log" 2>&1; then
     if grep -qxF 'PARTICLEOS_PODMAN_RUNSC_OK' "$container_log"; then
         pass 'Podman executes the trusted OCI image with default runsc/systrap'
     else
