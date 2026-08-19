@@ -1,0 +1,299 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+    echo "usage: $0 BASE_ARTIFACT_DIRECTORY CANDIDATE_ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS [OVMF_CODE]" >&2
+    exit 2
+fi
+
+repository=$(cd "$(dirname "$0")/.." && pwd)
+base_artifacts=$(realpath "$1")
+candidate_artifacts=$(realpath "$2")
+ovmf_vars_source=$(realpath "$3")
+ovmf_code=${4:-/usr/share/qemu/ovmf-x86_64-smm-code.bin}
+ovmf_code=$(realpath "$ovmf_code")
+audit_timeout=${VM_UPDATE_AUDIT_TIMEOUT:-900}
+denial_timeout=${VM_UPDATE_DENIAL_TIMEOUT:-80}
+audit_tmpdir=${VM_UPDATE_AUDIT_TMPDIR:-$base_artifacts}
+keep_failed=${VM_UPDATE_AUDIT_KEEP_FAILED:-0}
+
+for value in "$audit_timeout" "$denial_timeout"; do
+    [[ $value =~ ^[1-9][0-9]*$ ]] || {
+        echo 'VM update audit timeouts must be positive numbers of seconds' >&2
+        exit 2
+    }
+done
+[[ $keep_failed == 0 || $keep_failed == 1 ]] || {
+    echo 'VM_UPDATE_AUDIT_KEEP_FAILED must be 0 or 1' >&2
+    exit 2
+}
+[[ -r /dev/kvm && -w /dev/kvm ]] || {
+    echo '/dev/kvm is unavailable' >&2
+    exit 1
+}
+for command in base64 cp cut find grep mktemp pgrep qemu-system-x86_64 \
+        realpath sed sort swtpm tail timeout tr truncate zstd; do
+    command -v "$command" >/dev/null || {
+        echo "missing required command: $command" >&2
+        exit 1
+    }
+done
+[[ -f $ovmf_vars_source ]] || { echo "missing OVMF variable store: $ovmf_vars_source" >&2; exit 1; }
+[[ -f $ovmf_code ]] || { echo "missing OVMF code image: $ovmf_code" >&2; exit 1; }
+[[ -d $audit_tmpdir && -w $audit_tmpdir ]] || {
+    echo "VM update audit temporary directory is not writable: $audit_tmpdir" >&2
+    exit 1
+}
+
+"$repository/scripts/validate-artifacts.sh" "$base_artifacts"
+"$repository/scripts/validate-artifacts.sh" "$candidate_artifacts"
+
+find_one() {
+    local directory=$1 pattern=$2 description=$3
+    local -a matches=()
+    mapfile -t matches < <(find "$directory" -maxdepth 1 -type f -name "$pattern" -print)
+    [[ ${#matches[@]} -eq 1 ]] || {
+        echo "expected one $description in $directory, found ${#matches[@]}" >&2
+        return 1
+    }
+    printf '%s\n' "${matches[0]}"
+}
+
+read_image_version() {
+    local osrelease=$1 version
+    version=$(sed -n -E \
+        's/^IMAGE_VERSION="?([0-9]+([.][0-9]+)*)"?$/\1/p' \
+        "$osrelease")
+    [[ $version =~ ^[0-9]+([.][0-9]+)*$ ]] || {
+        echo "invalid IMAGE_VERSION in $osrelease" >&2
+        return 1
+    }
+    printf '%s\n' "$version"
+}
+
+base_image=$(find_one "$base_artifacts" 'ParticleOS-Host_*_x86-64.raw.zst' 'base disk image')
+candidate_image=$(find_one "$candidate_artifacts" 'ParticleOS-Host_*_x86-64.raw.zst' 'candidate disk image')
+base_osrelease=$(find_one "$base_artifacts" 'ParticleOS-Host_*_x86-64.osrelease' 'base os-release')
+candidate_osrelease=$(find_one "$candidate_artifacts" 'ParticleOS-Host_*_x86-64.osrelease' 'candidate os-release')
+base_version=$(read_image_version "$base_osrelease")
+candidate_version=$(read_image_version "$candidate_osrelease")
+latest_version=$(printf '%s\n%s\n' "$base_version" "$candidate_version" | sort -V | tail -1)
+[[ $candidate_version == "$latest_version" && $candidate_version != "$base_version" ]] || {
+    echo "candidate version $candidate_version must be newer than base $base_version" >&2
+    exit 1
+}
+
+# The candidate disk is authenticated above but updates are intentionally
+# downloaded through the image's production systemd-sysupdate configuration.
+# Keeping this reference makes the required local evidence explicit.
+[[ -s $candidate_image ]]
+
+audit_service=$(base64 -w0 "$repository/tests/update-rollback-audit.service")
+audit_target=$(base64 -w0 "$repository/tests/update-rollback-audit.target")
+audit_script=$(base64 -w0 "$repository/tests/update-rollback-audit.sh")
+health_service=$(base64 -w0 "$repository/tests/update-rollback-health.service")
+health_script=$(base64 -w0 "$repository/tests/update-rollback-health.sh")
+base_credential=$(printf '%s\n' "$base_version" | base64 -w0)
+candidate_credential=$(printf '%s\n' "$candidate_version" | base64 -w0)
+
+scratch=$(mktemp -d "$audit_tmpdir/.particleos-update-rollback.XXXXXXXX")
+runtime_directory=$(mktemp -d /tmp/particleos-update-rollback.XXXXXXXX)
+active_state=
+qemu_active=0
+
+stop_tpm() {
+    local pid='' pidfile
+    [[ -n ${active_state:-} ]] || return 0
+    pidfile=$active_state/swtpm.pid
+    if [[ -s $pidfile ]]; then
+        read -r pid <"$pidfile" || true
+    fi
+    if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/comm &&
+            -r /proc/$pid/cmdline && $(<"/proc/$pid/comm") == swtpm ]]; then
+        command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline")
+        if [[ $command_line == *"$active_state/"* ]]; then
+            kill "$pid" 2>/dev/null || true
+            for _ in {1..20}; do
+                [[ ! -e /proc/$pid ]] && break
+                sleep 0.1
+            done
+            if [[ -r /proc/$pid/comm && $(<"/proc/$pid/comm") == swtpm ]]; then
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        fi
+    fi
+}
+
+stop_qemu() {
+    local command_line='' pid='' pidfile
+    [[ -n ${active_state:-} ]] || return 0
+    pidfile=$active_state/qemu.pid
+    if [[ -s $pidfile ]]; then
+        read -r pid <"$pidfile" || true
+    fi
+    if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/comm &&
+            -r /proc/$pid/cmdline && $(<"/proc/$pid/comm") == qemu-system-x86 ]]; then
+        command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline")
+        if [[ $command_line == *"$active_state/"* ]]; then
+            kill -TERM "$pid" 2>/dev/null || true
+            for _ in {1..30}; do
+                [[ ! -e /proc/$pid ]] && break
+                sleep 0.1
+            done
+            if [[ -r /proc/$pid/comm && $(<"/proc/$pid/comm") == qemu-system-x86 ]]; then
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        fi
+    fi
+}
+
+cleanup() {
+    local status=$?
+    if ((qemu_active)); then
+        stop_qemu
+    fi
+    stop_tpm
+    if [[ -n ${runtime_directory:-} && -d $runtime_directory &&
+            $runtime_directory == /tmp/particleos-update-rollback.* ]]; then
+        rm -rf -- "$runtime_directory"
+    fi
+    if ((status != 0)) && [[ $keep_failed == 1 ]]; then
+        echo "Preserved failed update/rollback audit state: $scratch" >&2
+    elif [[ -n ${scratch:-} && -d $scratch &&
+            ${scratch##*/} == .particleos-update-rollback.* ]]; then
+        rm -rf -- "$scratch"
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
+
+prepare_scenario() {
+    local scenario=$1
+    active_state=$scratch/$scenario
+    mkdir -m 0700 "$active_state" "$active_state/tpm"
+    cp --reflink=auto --sparse=always "$ovmf_vars_source" "$active_state/ovmf-vars.bin"
+    zstd --sparse -q -d -f -o "$active_state/particleos.raw" "$base_image"
+    truncate -s 16G "$active_state/particleos.raw"
+}
+
+extract_usrhash() {
+    local log=$1
+    grep -m1 -oE 'usrhash=[0-9a-f]{64}' "$log" | cut -d= -f2
+}
+
+run_guest() {
+    local scenario=$1 boot_number=$2 expectation=$3
+    local log=$active_state/boot-$boot_number.log
+    local socket=$runtime_directory/tpm.sock
+    local scenario_credential status timeout_seconds
+    scenario_credential=$(printf '%s\n' "$scenario" | base64 -w0)
+    timeout_seconds=$audit_timeout
+    [[ $expectation == denied ]] && timeout_seconds=$denial_timeout
+
+    rm -f -- "$active_state/swtpm.pid" "$active_state/qemu.pid" "$socket"
+    swtpm socket \
+        --tpm2 \
+        --tpmstate "dir=$active_state/tpm" \
+        --ctrl "type=unixio,path=$socket" \
+        --pid "file=$active_state/swtpm.pid" \
+        --log "file=$active_state/swtpm-$boot_number.log" \
+        --daemon \
+        --terminate
+
+    qemu_active=1
+    set +e
+    timeout --foreground --signal=TERM --kill-after=15s "$timeout_seconds" \
+        qemu-system-x86_64 \
+        -name "particleos-update-rollback-audit-$$-$scenario" \
+        -machine q35,smm=on,accel=kvm \
+        -cpu host \
+        -m 2048 \
+        -smp 2 \
+        -pidfile "$active_state/qemu.pid" \
+        -global driver=cfi.pflash01,property=secure,value=on \
+        -drive "if=pflash,format=raw,unit=0,readonly=on,file=$ovmf_code" \
+        -drive "if=pflash,format=raw,unit=1,file=$active_state/ovmf-vars.bin" \
+        -drive "if=virtio,format=raw,file=$active_state/particleos.raw" \
+        -chardev "socket,id=chrtpm,path=$socket" \
+        -tpmdev emulator,id=tpm0,chardev=chrtpm \
+        -device tpm-tis,tpmdev=tpm0 \
+        -netdev user,id=net0 \
+        -device virtio-net-pci,netdev=net0 \
+        -display none \
+        -serial "file:$log" \
+        -monitor none \
+        -no-reboot \
+        -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.unit=update-rollback-audit.target systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate-update.timer systemd.mask=systemd-sysupdate-reboot.timer' \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.update-rollback-audit.service=$audit_service" \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.update-rollback-audit.target=$audit_target" \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.particleos-workload-health.service=$health_service" \
+        -smbios "type=11,value=io.systemd.credential.binary:update-rollback-audit=$audit_script" \
+        -smbios "type=11,value=io.systemd.credential.binary:update-rollback-health=$health_script" \
+        -smbios "type=11,value=io.systemd.credential.binary:update-audit-scenario=$scenario_credential" \
+        -smbios "type=11,value=io.systemd.credential.binary:update-audit-base-version=$base_credential" \
+        -smbios "type=11,value=io.systemd.credential.binary:update-audit-candidate-version=$candidate_credential"
+    status=$?
+    set -e
+    qemu_active=0
+    stop_tpm
+
+    if [[ $expectation == clean ]]; then
+        if ((status != 0)); then
+            tail -240 "$log" >&2 || true
+            echo "$scenario boot $boot_number did not power off or reboot cleanly" >&2
+            return 1
+        fi
+        if grep -q '^UPDATE_ROLLBACK_AUDIT_FAIL ' "$log"; then
+            tail -240 "$log" >&2 || true
+            echo "$scenario boot $boot_number failed a guest-side audit assertion" >&2
+            return 1
+        fi
+    else
+        if ((status != 124)); then
+            tail -240 "$log" >&2 || true
+            echo "superseded UKI unexpectedly completed boot with status $status" >&2
+            return 1
+        fi
+        if grep -q '^UPDATE_ROLLBACK_AUDIT_BYPASS ' "$log"; then
+            tail -240 "$log" >&2 || true
+            echo 'superseded UKI bypassed the TPM rollback boundary' >&2
+            return 1
+        fi
+        grep -q 'unit=emergency ' "$log" || {
+            tail -240 "$log" >&2 || true
+            echo 'superseded UKI did not produce the expected initrd emergency evidence' >&2
+            return 1
+        }
+    fi
+}
+
+echo "Testing blessed-candidate revocation: $base_version -> $candidate_version"
+prepare_scenario rollback-denial
+run_guest rollback-denial 1 clean
+grep '^UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
+denial_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
+run_guest rollback-denial 2 clean
+grep '^UPDATE_ROLLBACK_AUDIT_CANDIDATE_BLESSED ' "$active_state/boot-2.log"
+denial_candidate_usrhash=$(extract_usrhash "$active_state/boot-2.log")
+[[ $denial_candidate_usrhash != "$denial_base_usrhash" ]]
+run_guest rollback-denial 3 denied
+denial_attempt_usrhash=$(extract_usrhash "$active_state/boot-3.log")
+[[ $denial_attempt_usrhash == "$denial_base_usrhash" ]]
+echo 'UPDATE_ROLLBACK_AUDIT_DENIAL_PASS superseded signed UKI could not unlock persistent state'
+
+echo "Testing health-triggered A/B fallback: $candidate_version -> $base_version"
+prepare_scenario health-fallback
+run_guest health-fallback 1 clean
+grep '^UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
+fallback_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
+for boot_number in 2 3 4; do
+    run_guest health-fallback "$boot_number" clean
+    grep '^UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT ' "$active_state/boot-$boot_number.log"
+    [[ $(extract_usrhash "$active_state/boot-$boot_number.log") != "$fallback_base_usrhash" ]]
+done
+run_guest health-fallback 5 clean
+grep '^UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-5.log"
+[[ $(extract_usrhash "$active_state/boot-5.log") == "$fallback_base_usrhash" ]]
+
+echo 'ParticleOS A/B update, health fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'

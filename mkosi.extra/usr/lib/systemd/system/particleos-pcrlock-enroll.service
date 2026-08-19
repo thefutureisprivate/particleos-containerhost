@@ -1,6 +1,6 @@
 [Unit]
 Description=Migrate persistent state to the PCR 7+11 NV policy
-Documentation=https://github.com/thefutureisprivate/particleos-containerhost#updates-and-rollback
+Documentation=https://github.com/thefutureisprivate/particleos-containerhost#updates
 ConditionSecurity=measured-uki
 ConditionPathExists=/dev/tpmrm0
 ConditionPathExists=!/var/lib/particleos/pcrlock-enrolled

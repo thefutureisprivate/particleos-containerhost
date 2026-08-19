@@ -1,0 +1,20 @@
+[Unit]
+Description=ParticleOS A/B update and rollback audit
+ConditionPathExists=!/etc/initrd-release
+Requires=particleos-pcrlock-enroll.service particleos-workload-health.service
+Wants=particleos-pcrlock-prune.service
+After=multi-user.target particleos-pcrlock-enroll.service particleos-workload-health.service systemd-bless-boot.service particleos-pcrlock-prune.service nftables.service
+SuccessAction=poweroff
+FailureAction=poweroff
+
+[Service]
+Type=oneshot
+LoadCredential=update-rollback-audit
+LoadCredential=update-audit-scenario
+LoadCredential=update-audit-base-version
+LoadCredential=update-audit-candidate-version
+ExecStart=/usr/bin/bash %d/update-rollback-audit
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyS0
+TimeoutStartSec=15min

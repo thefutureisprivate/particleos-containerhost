@@ -231,6 +231,8 @@ repository-scoped `sigstoreSigned` or `signedBy` requirements. The fallback
 remains `default: reject`, and each trust change is tested with both an
 approved signed image and a deliberately untrusted image.
 
+### Workload health
+
 Root-owned `.container` files use the standard Quadlet paths under `/run`,
 `/etc`, and `/usr/share`. Each workload declares `HealthCmd=` and
 `Notify=healthy`. The host verifies the generated unit, active container, and
@@ -380,11 +382,12 @@ systemctl start systemd-sysupdate-update.service
 systemctl start systemd-sysupdate-reboot.service
 ```
 
-Every transfer uses `Verify=yes`. The update unit commits the two-UKI PCR
-policy before recording reboot readiness. The rebooted candidate must satisfy
-system health and Quadlet health before blessing; otherwise systemd-boot's
-boot-count budget returns to the working slot. Blessing either slot prunes the
-other UKI from state-unlock authorization.
+Every transfer uses `Verify=yes`. The update unit stays active until every
+transfer commits, then commits the two-UKI PCR policy before recording reboot
+readiness. The rebooted candidate must satisfy system health and Quadlet health
+before blessing; otherwise systemd-boot's boot-count budget returns to the
+working slot. Blessing either slot prunes the other UKI from state-unlock
+authorization.
 
 ## Diagnostics and Tests
 
@@ -447,6 +450,28 @@ PARTICLEOS_VM_AUDIT_PASS checks=80
 
 Set `VM_AUDIT_KEEP_FAILED=1` to retain a failed guest disk and serial logs for
 diagnosis. The runner still stops QEMU and swtpm.
+
+Qualify the complete update and rollback lifecycle with two authenticated OBS
+releases and the same enrolled OVMF variable store:
+
+```console
+./tests/run-update-rollback-audit.sh \
+  /path/to/base-artifacts \
+  /path/to/candidate-artifacts \
+  /path/to/enrolled-ovmf-vars.bin
+```
+
+The first scenario downloads the candidate through the production
+systemd-sysupdate configuration, verifies the two-UKI PCR policy, boots and
+blesses the candidate, confirms pruning to one UKI measurement, and then
+forces the superseded signed entry. That entry must reach the initrd emergency
+path before persistent state is unlocked. The second scenario repeats the
+update on clean state, injects a candidate-only health failure for all three
+boot-count attempts, and requires systemd-boot to return to the base version
+while the pre-blessing TPM policy still authorizes it.
+
+Set `VM_UPDATE_AUDIT_KEEP_FAILED=1` to retain disks and serial logs after a
+failure. The runner stops every QEMU and swtpm process in both scenarios.
 
 ## Residual Risks
 

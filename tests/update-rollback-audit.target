@@ -1,0 +1,5 @@
+[Unit]
+Description=ParticleOS A/B update and rollback audit target
+Requires=multi-user.target update-rollback-audit.service
+After=multi-user.target update-rollback-audit.service
+AllowIsolate=yes
