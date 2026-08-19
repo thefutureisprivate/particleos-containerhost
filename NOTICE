@@ -4,3 +4,8 @@ under LGPL-2.1-or-later. See LICENSE.
 The separately built runsc RPM redistributes official gVisor release binaries
 under Apache-2.0. Its source archive, checksum, and license are pinned in
 .obs/runsc; the installed RPM carries the upstream license text.
+
+The separately signed ipe-policy-containerhost RPM is based on the Linux IPE
+policy format and the systemd project's reference packaging, under
+GPL-2.0-or-later. Its downstream policy text is maintained in
+.obs/ipe-policy-containerhost.

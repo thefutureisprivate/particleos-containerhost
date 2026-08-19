@@ -1,0 +1,22 @@
+policy_name=ipe-policy policy_version=0.0.2
+
+# Systrap and its sandboxed workloads require executable anonymous memory.
+# IPE cannot qualify anonymous memory by SELinux domain, so host executable
+# integrity is enforced by signed dm-verity /usr, noexec state, and SELinux.
+DEFAULT action=DENY
+DEFAULT op=EXECUTE action=ALLOW
+
+# Kernel-fed objects must still originate in the verified boot environment or
+# on a volume whose dm-verity root hash has a valid built-in signature.
+op=FIRMWARE boot_verified=TRUE action=ALLOW
+op=FIRMWARE dmverity_signature=TRUE action=ALLOW
+op=KMODULE boot_verified=TRUE action=ALLOW
+op=KMODULE dmverity_signature=TRUE action=ALLOW
+op=KEXEC_IMAGE boot_verified=TRUE action=ALLOW
+op=KEXEC_IMAGE dmverity_signature=TRUE action=ALLOW
+op=KEXEC_INITRAMFS boot_verified=TRUE action=ALLOW
+op=KEXEC_INITRAMFS dmverity_signature=TRUE action=ALLOW
+op=POLICY boot_verified=TRUE action=ALLOW
+op=POLICY dmverity_signature=TRUE action=ALLOW
+op=X509_CERT boot_verified=TRUE action=ALLOW
+op=X509_CERT dmverity_signature=TRUE action=ALLOW

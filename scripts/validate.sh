@@ -28,6 +28,7 @@ require_fixed 'ipe.enforce=1' mkosi.conf 'IPE enforcement is on the signed comma
 require_fixed 'enforcing=1' mkosi.conf 'SELinux enforcement is on the signed command line'
 require_fixed 'lockdown=confidentiality' mkosi.conf 'kernel lockdown is enforced'
 require_fixed 'module.sig_enforce=1' mkosi.conf 'kernel module signatures are enforced'
+require_fixed 'rootflags=nosuid,nodev,noexec' mkosi.conf 'persistent state is mounted noexec'
 require_fixed 'systemd.firstboot=headless' mkosi.conf 'first boot is unattended without disabling noninteractive provisioning'
 require_fixed 'rd.systemd.mask=systemd-tpm2-setup-early.service' mkosi.conf 'the unused initrd NvPCR setup path is suppressed'
 require_fixed 'Include=mkosi-obs' mkosi.obs.conf 'upstream OBS signer is included'
@@ -44,6 +45,24 @@ for type in usr usr-verity usr-verity-sig; do
 done
 require_fixed 'Encrypt=tpm2' mkosi.extra/usr/lib/repart.d/40-root.conf 'persistent state is TPM2 encrypted'
 require_fixed 'TPM2PCRs=7' mkosi.extra/usr/lib/repart.d/40-root.conf 'state is bound to Secure Boot policy'
+require_fixed 'ipe-policy-containerhost' mkosi.conf 'the systrap-compatible signed IPE policy is selected'
+if grep -qxF '        ipe-policy' mkosi.conf; then
+    fail 'the incompatible generic IPE package is not selected'
+else
+    pass 'the incompatible generic IPE package is not selected'
+fi
+ipe_policy=.obs/ipe-policy-containerhost/ipe-policy
+require_fixed 'DEFAULT action=DENY' "$ipe_policy" 'IPE denies unmatched kernel-fed objects'
+require_fixed 'DEFAULT op=EXECUTE action=ALLOW' "$ipe_policy" 'IPE permits systrap anonymous execution explicitly'
+for operation in FIRMWARE KMODULE KEXEC_IMAGE KEXEC_INITRAMFS POLICY X509_CERT; do
+    require_fixed "op=$operation dmverity_signature=TRUE action=ALLOW" "$ipe_policy" "IPE trusts signed dm-verity for $operation"
+done
+require_fixed '# needssslcertforbuild' .obs/ipe-policy-containerhost/ipe-policy-containerhost.spec 'the container-host IPE policy requires OBS signing'
+require_fixed 'systemd-keyutil' .obs/ipe-policy-containerhost/ipe-policy-containerhost.spec 'the IPE policy is packaged as signed PKCS#7'
+selinux_policy=mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil
+require_fixed '(typeattributeset anonymous_exec_privileged_domain (.container_runtime_t))' "$selinux_policy" 'SELinux reserves anonymous execution for the gVisor runtime'
+require_fixed '(deny anonymous_exec_restricted_domain self (process (execmem execstack)))' "$selinux_policy" 'SELinux denies executable anonymous memory outside the runtime'
+require_fixed '(deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy" 'SELinux denies systrap-style tmpfs entrypoints outside the runtime'
 if ! grep -RqsE '^Type=(home|swap)$' mkosi.extra/usr/lib/repart.d; then
     pass 'no unencrypted home or swap partition exists'
 else
@@ -148,6 +167,7 @@ require_fixed 'sha256sum -c "${checksum_manifest##*/}"' scripts/validate-artifac
 python3 - <<'PY' || failures=$((failures + 1))
 import xml.etree.ElementTree as ET
 for p in ('.obs/runsc/_service', '.obs/runsc/package-meta.xml',
+          '.obs/ipe-policy-containerhost/package-meta.xml',
           '.obs/particleos-containerhost/_service.example',
           '.obs/particleos-containerhost/package-meta.xml'):
     ET.parse(p)

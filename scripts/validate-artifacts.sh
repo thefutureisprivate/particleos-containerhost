@@ -57,6 +57,7 @@ fi
 gzip -t "$manifest"
 zgrep -q '"name": "runsc"' "$manifest"
 zgrep -q '"name": "podman"' "$manifest"
+zgrep -q '"name": "ipe-policy-containerhost"' "$manifest"
 
 image_id="$(sed -n 's/^IMAGE_ID=//p' "$os_release" | tr -d '"')"
 image_version="$(sed -n 's/^IMAGE_VERSION=//p' "$os_release" | tr -d '"')"

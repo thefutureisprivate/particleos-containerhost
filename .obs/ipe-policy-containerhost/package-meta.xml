@@ -1,0 +1,10 @@
+<package name="ipe-policy-containerhost" project="home:thefutureisprivate">
+  <title>ParticleOS container-host IPE policy</title>
+  <description>
+    Project-signed IPE policy adapted for the gVisor systrap container host.
+  </description>
+  <build>
+    <disable/>
+    <enable repository="particleos_base_Fedora_44" arch="x86_64"/>
+  </build>
+</package>

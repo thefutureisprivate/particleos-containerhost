@@ -1,9 +1,23 @@
 ; SPDX-License-Identifier: LGPL-2.1-or-later
 
-; Permit user namespaces only to trusted boot/update helpers and gVisor's
-; confined rootful runtime. Login users and arbitrary services are denied even
-; though a small global namespace quota remains available to those helpers.
+; Host-specific restrictions and the narrow exceptions required by the
+; confined rootful gVisor runtime.
 (block particleos_containerhost
+  ; IPE cannot authenticate the executable anonymous memory used by systrap.
+  ; Reserve executable anonymous memory and the container-runtime tmpfs
+  ; entrypoint type to the confined gVisor/Podman runtime domain. This makes
+  ; the IPE EXECUTE exception a domain-scoped SELinux exception instead of a
+  ; host-wide permission for JIT-style execution.
+  (typeattribute anonymous_exec_privileged_domain)
+  (typeattributeset anonymous_exec_privileged_domain (.container_runtime_t))
+
+  (typeattribute anonymous_exec_restricted_domain)
+  (typeattributeset anonymous_exec_restricted_domain
+    (and (.domain) (not (anonymous_exec_privileged_domain))))
+  (deny anonymous_exec_restricted_domain self (process (execmem execstack)))
+  (deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t
+    (file (entrypoint execute execute_no_trans)))
+
   (typeattribute userns_privileged_domain)
   (typeattributeset userns_privileged_domain
     (.init_t .kernel_t .systemd_importd_t .container_runtime_t))

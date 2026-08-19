@@ -36,12 +36,36 @@ else
 fi
 check_grep 'kernel lockdown is in confidentiality mode' '\[confidentiality\]' /sys/kernel/security/lockdown
 check_grep 'IPE enforcement is requested by the signed UKI' '(^| )ipe\.enforce=1( |$)' /proc/cmdline
-if grep -Rqx '1' /sys/kernel/security/ipe/policies/*/active 2>/dev/null; then
+ipe_policy=
+for active in /sys/kernel/security/ipe/policies/*/active; do
+    if [[ -f $active && $(<"$active") == 1 ]]; then
+        ipe_policy=${active%/active}/policy
+        break
+    fi
+done
+if [[ -n $ipe_policy ]]; then
     pass 'an IPE policy is active'
 else
     fail 'an IPE policy is active'
 fi
+if [[ -n $ipe_policy ]] &&
+        grep -qxF 'DEFAULT action=DENY' "$ipe_policy" &&
+        grep -qxF 'DEFAULT op=EXECUTE action=ALLOW' "$ipe_policy" &&
+        grep -qxF 'op=KMODULE dmverity_signature=TRUE action=ALLOW' "$ipe_policy" &&
+        grep -qxF 'op=FIRMWARE dmverity_signature=TRUE action=ALLOW' "$ipe_policy"; then
+    pass 'IPE defaults deny for kernel-fed objects while supporting systrap execution'
+else
+    fail 'IPE defaults deny for kernel-fed objects while supporting systrap execution'
+fi
 if [[ $(getenforce) == Enforcing ]]; then pass 'SELinux is enforcing'; else fail 'SELinux is enforcing'; fi
+selinux_policy=/usr/lib/particleos/selinux/particleos-containerhost.cil
+if grep -qxF '  (typeattributeset anonymous_exec_privileged_domain (.container_runtime_t))' "$selinux_policy" &&
+        grep -qxF '  (deny anonymous_exec_restricted_domain self (process (execmem execstack)))' "$selinux_policy" &&
+        grep -qxF '  (deny anonymous_exec_restricted_domain .container_runtime_tmpfs_t' "$selinux_policy"; then
+    pass 'SELinux reserves executable anonymous memory for the gVisor runtime'
+else
+    fail 'SELinux reserves executable anonymous memory for the gVisor runtime'
+fi
 
 usr_type=$(findmnt -n -o FSTYPE /usr 2>/dev/null || true)
 usr_options=$(findmnt -n -o OPTIONS /usr 2>/dev/null || true)
@@ -57,6 +81,12 @@ if findmnt -n -o SOURCE / | grep -q '^/dev/mapper/root'; then
     pass 'persistent root is mounted from the encrypted mapper device'
 else
     fail 'persistent root is mounted from the encrypted mapper device'
+fi
+root_options=$(findmnt -n -o OPTIONS / 2>/dev/null || true)
+if [[ ,$root_options, == *,noexec,* ]]; then
+    pass 'persistent root is mounted noexec'
+else
+    fail 'persistent root is mounted noexec'
 fi
 
 state=/dev/disk/by-partlabel/ParticleOS-Host-root
