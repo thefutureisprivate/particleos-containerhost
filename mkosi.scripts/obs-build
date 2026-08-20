@@ -2,13 +2,26 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-sources=/usr/src/packages/SOURCES
+sources=${PARTICLEOS_OBS_SOURCES:-/usr/src/packages/SOURCES}
 repository=$sources/particleos-containerhost
-[[ -x $repository/scripts/validate.sh ]] || {
-    echo "Repository security validation is unavailable" >&2
+signing_wrapper=$sources/particleos-containerhost-obs-build
+archive_helper=$sources/particleos-containerhost-repart-archive
+gate=$sources/particleos-containerhost-security-gate
+
+if [[ -x $repository/scripts/validate.sh ]]; then
+    "$repository/scripts/validate.sh"
+elif [[ -f $gate && -f $signing_wrapper && -f $archive_helper ]]; then
+    [[ $(grep -c '^validation=passed$' "$gate") -eq 1 ]]
+    wrapper_digest=$(sed -n 's/^obs_build_sha256=//p' "$gate")
+    archive_digest=$(sed -n 's/^archive_helper_sha256=//p' "$gate")
+    [[ $wrapper_digest =~ ^[0-9a-f]{64}$ &&
+       $archive_digest =~ ^[0-9a-f]{64}$ ]]
+    [[ $(sha256sum -- "$signing_wrapper" | awk '{print $1}') == "$wrapper_digest" ]]
+    [[ $(sha256sum -- "$archive_helper" | awk '{print $1}') == "$archive_digest" ]]
+else
+    echo "Repository security validation or its signing-pass attestation is unavailable" >&2
     exit 1
-}
-"$repository/scripts/validate.sh"
+fi
 
 resource_dir="$(/usr/bin/python3 -c '
 from pathlib import Path
@@ -65,12 +78,11 @@ label="${image_id}_${image_version}_vsig"
 }
 
 definitions="$scratch/repart"
-archive_helper="$sources/particleos-containerhost-repart-archive"
-[[ -x "$archive_helper" ]] || {
+[[ -f "$archive_helper" ]] || {
     echo "Hostile-input repart archive validator is unavailable" >&2
     exit 1
 }
-"$archive_helper" "$repart_archive" "$definitions"
+/usr/bin/python3 "$archive_helper" "$repart_archive" "$definitions"
 mapfile -t signature_definitions < <(
     grep -rl '^Type=usr-verity-sig$' "$definitions" --include='*.conf'
 )

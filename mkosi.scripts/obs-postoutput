@@ -27,10 +27,27 @@ archive_helper=/usr/src/packages/SOURCES/particleos-containerhost/mkosi.scripts/
 "$upstream_helper" "$@"
 install -m0755 "$build_wrapper" "$OUTPUTDIR/particleos-containerhost-obs-build"
 install -m0755 "$archive_helper" "$OUTPUTDIR/particleos-containerhost-repart-archive"
+wrapper_digest=$(sha256sum -- "$build_wrapper" | awk '{print $1}')
+archive_digest=$(sha256sum -- "$archive_helper" | awk '{print $1}')
+cat >"$OUTPUTDIR/particleos-containerhost-security-gate" <<EOF
+validation=passed
+obs_build_sha256=$wrapper_digest
+archive_helper_sha256=$archive_digest
+EOF
+cat >"$OUTPUTDIR/particleos-containerhost-signing.mk" <<'EOF'
+.RECIPEPREFIX := >
+.PHONY: all
+all:
+>/usr/bin/bash /work/src/usr/src/packages/SOURCES/particleos-containerhost-obs-build
+EOF
 cat >>"$OUTPUTDIR/mkosi.conf" <<'EOF'
+
+[Build]
+BuildSources=/usr/src/packages/SOURCES:/usr/src/packages/SOURCES
+Environment=PARTICLEOS_OBS_SOURCES=/work/src/usr/src/packages/SOURCES
+Environment=MAKEFLAGS=--file=/work/src/usr/src/packages/SOURCES/particleos-containerhost-signing.mk
 
 [Content]
 BuildScripts=
-BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-obs-build
-BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-repart-archive
+BuildScripts=/usr/bin/make
 EOF

@@ -281,9 +281,18 @@ require_fixed 'gpgv --keyring' scripts/validate-artifacts.sh 'artifact validatio
 require_fixed 'sbverify --cert' scripts/validate-artifacts.sh 'artifact validation cryptographically verifies the UKI PE signature'
 require_fixed 'etc/ipe/ipe-policy\.p7b' scripts/validate-artifacts.sh 'artifact validation inspects the signed UKI for the IPE policy'
 require_fixed 'particleos-containerhost-repart-archive' mkosi.scripts/obs-build 'the OBS signing stage uses the hostile-input archive policy'
-require_fixed 'BuildScripts=/usr/src/packages/SOURCES/particleos-containerhost-repart-archive' mkosi.scripts/obs-postoutput 'the hostile archive validator is in the OBS signing source closure'
+require_fixed 'BuildSources=/usr/src/packages/SOURCES:/usr/src/packages/SOURCES' mkosi.scripts/obs-postoutput 'the complete signing inputs remain in the OBS source closure'
+require_fixed 'BuildScripts=/usr/bin/make' mkosi.scripts/obs-postoutput 'OBS source-mode normalization cannot disable the signing gate'
+require_fixed 'MAKEFLAGS=--file=/work/src/usr/src/packages/SOURCES/particleos-containerhost-signing.mk' mkosi.scripts/obs-postoutput 'the executable make handoff selects only the generated signing recipe'
+require_fixed 'particleos-containerhost-security-gate' mkosi.scripts/obs-postoutput 'the first-pass repository gate emits a signing-pass attestation'
+# Literal implementation strings, not expressions for this validator.
 # shellcheck disable=SC2016
-require_fixed '"$repository/scripts/validate.sh"' mkosi.scripts/obs-build 'OBS publication runs the repository security gate before both build passes'
+require_fixed 'sha256sum -- "$signing_wrapper"' mkosi.scripts/obs-build 'the signing pass verifies its gate wrapper against the attestation'
+# shellcheck disable=SC2016
+require_fixed '/usr/bin/python3 "$archive_helper"' mkosi.scripts/obs-build 'archive validation does not trust OBS-preserved executable mode'
+# shellcheck disable=SC2016
+require_fixed '"$repository/scripts/validate.sh"' mkosi.scripts/obs-build 'OBS publication runs the repository security gate before artifact construction'
+require_fixed 'validation=passed' mkosi.scripts/obs-build 'the signing pass requires the first-pass gate attestation'
 require_fixed 'name: security-gate' .github/workflows/security.yml 'GitHub reports the repository security gate'
 require_fixed 'run: ./scripts/validate.sh' .github/workflows/security.yml 'GitHub executes the same publication policy suite'
 require_fixed 'actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09' .github/workflows/security.yml 'the CI checkout action is commit-pinned'
