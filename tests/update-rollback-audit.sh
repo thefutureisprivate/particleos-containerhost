@@ -114,7 +114,12 @@ initial)
     [[ ${#component_files[@]} -eq 1 ]]
     echo "UPDATE_ROLLBACK_AUDIT_OLD_UKI_REJECT version=$candidate_version"
 
-    systemctl start --wait systemd-sysupdate.service
+    if ! systemctl start --wait systemd-sysupdate.service; then
+        systemctl status --no-pager --full systemd-sysupdate.service >&2 || true
+        journalctl --no-pager --output=short-monotonic \
+            -u systemd-sysupdate.service >&2 || true
+        exit 1
+    fi
     journalctl --no-pager --output=short-monotonic \
         -u systemd-sysupdate.service >&2 || true
 

@@ -63,6 +63,18 @@ require_fixed '"$uki" "$scratch/uki.copy"' mkosi.extra/usr/lib/particleos/pcrloc
 reject_fixed 'objcopy --dump-section ".osrel=$osrelease" "$resolved"' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime UKI inspection never invokes objcopy without a disposable output'
 # shellcheck disable=SC2016
 require_fixed 'pcrlock-refresh candidate "$candidate_version"' mkosi.extra/usr/lib/particleos/sysupdate 'only the authenticated sysupdate candidate is admitted'
+# shellcheck disable=SC2016
+require_fixed '[[ $candidate_json =~ ^\{\"available\":\"([0-9]+([.][0-9]+)*)\"\}$ ]]' mkosi.extra/usr/lib/particleos/sysupdate 'the stable systemd candidate JSON is parsed with literal quotation marks'
+candidate_json='{"available":"54.1"}'
+no_update_json='{"available":null}'
+if [[ $candidate_json =~ ^\{\"available\":\"([0-9]+([.][0-9]+)*)\"\}$ ]] &&
+        [[ ${BASH_REMATCH[1]} == 54.1 ]] &&
+        [[ $no_update_json == '{"available":null}' ]] &&
+        [[ ! $no_update_json =~ ^\{\"available\":\"([0-9]+([.][0-9]+)*)\"\}$ ]]; then
+    pass 'candidate and no-update systemd JSON forms are unambiguous'
+else
+    fail 'candidate and no-update systemd JSON forms are unambiguous'
+fi
 reject_fixed 'pcrlock-refresh all' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate.service.d/40-particleos-egress.conf 'updates never authorize an ESP-wide UKI enumeration'
 reject_fixed "-name 'ParticleOS-Host_*.efi'" mkosi.extra/usr/lib/particleos/pcrlock-refresh 'arbitrary project-signed ESP entries are not policy inputs'
 require_fixed 'pcrlock-bootstrap-pending' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap retirement records the enrollment boot'
@@ -317,6 +329,7 @@ reject_fixed 'After=multi-user.target' tests/update-rollback-audit-getty.conf 'u
 reject_fixed 'particleos-workload-health.service' tests/update-rollback-audit-getty.conf 'update scenarios control optional health without an activation-cycle dependency'
 require_fixed 'systemd.extra-unit.particleos-workload-health.service' tests/run-update-rollback-audit.sh 'rollback audit injects counted-deployment workload-health failure'
 require_fixed 'UPDATE_ROLLBACK_AUDIT_OLD_UKI_REJECT' tests/update-rollback-audit.sh 'rollback audit reproduces and rejects renamed old signed UKI admission'
+require_fixed 'systemctl status --no-pager --full systemd-sysupdate.service' tests/update-rollback-audit.sh 'update audit preserves the production service failure cause'
 require_fixed 'run_guest rollback-denial 0 enrollment' tests/run-update-rollback-audit.sh 'update audit preserves bootstrap through a separate enrollment boot'
 require_fixed 'for boot_number in 2 3 4' tests/run-update-rollback-audit.sh 'rollback audit exhausts the candidate boot-count budget'
 require_fixed 'run_guest rollback-denial 3 denied' tests/run-update-rollback-audit.sh 'rollback audit forces the superseded signed UKI after pruning'

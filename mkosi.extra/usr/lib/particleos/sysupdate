@@ -6,7 +6,7 @@ candidate_json=$(systemd-sysupdate --json=short check-new)
 if [[ $candidate_json == '{"available":null}' ]]; then
     exit 0
 fi
-[[ $candidate_json =~ ^\{"available":"([0-9]+([.][0-9]+)*)"\}$ ]]
+[[ $candidate_json =~ ^\{\"available\":\"([0-9]+([.][0-9]+)*)\"\}$ ]]
 candidate_version=${BASH_REMATCH[1]}
 
 current_version=$(sed -n -E \
