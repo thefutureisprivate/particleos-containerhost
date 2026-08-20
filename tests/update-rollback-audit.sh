@@ -114,9 +114,9 @@ initial)
     [[ ${#component_files[@]} -eq 1 ]]
     echo "UPDATE_ROLLBACK_AUDIT_OLD_UKI_REJECT version=$candidate_version"
 
-    systemctl start --wait systemd-sysupdate-update.service
+    systemctl start --wait systemd-sysupdate.service
     journalctl --no-pager --output=short-monotonic \
-        -u systemd-sysupdate-update.service >&2 || true
+        -u systemd-sysupdate.service >&2 || true
 
     mapfile -t component_files < <(
         find "$component" -mindepth 1 -maxdepth 1 -type f -name '*.pcrlock' -print | sort

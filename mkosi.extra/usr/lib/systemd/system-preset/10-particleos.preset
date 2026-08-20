@@ -20,7 +20,7 @@ disable sshd.socket
 enable polkit-agent-helper.socket
 enable preset-global.service
 enable systemd-oomd.service
-enable systemd-sysupdate-update.timer
+enable systemd-sysupdate.timer
 enable systemd-sysupdate-reboot.timer
 enable systemd-bless-boot.service
 enable systemd-boot-check-no-failures.service

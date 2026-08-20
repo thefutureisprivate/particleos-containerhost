@@ -224,7 +224,7 @@ run_guest() {
         -serial "file:$log" \
         -monitor none \
         -no-reboot \
-        -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.unit=update-rollback-audit.target systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate-update.timer systemd.mask=systemd-sysupdate-reboot.timer' \
+        -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.unit=update-rollback-audit.target systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.update-rollback-audit.service=$audit_service" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.update-rollback-audit.target=$audit_target" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.particleos-workload-health.service=$health_service" \

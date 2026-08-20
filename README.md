@@ -413,7 +413,7 @@ Run an immediate guarded update cycle with:
 ```console
 systemd-sysupdate list
 systemd-sysupdate check-new
-systemctl start systemd-sysupdate-update.service
+systemctl start systemd-sysupdate.service
 systemctl start systemd-sysupdate-reboot.service
 ```
 

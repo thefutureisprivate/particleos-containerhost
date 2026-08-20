@@ -11,8 +11,8 @@ install --owner=root --group=root --mode=0600 /dev/null /etc/subuid
 install --owner=root --group=root --mode=0600 /dev/null /etc/subgid
 
 for current_systemd_unit in \
-    systemd-sysupdate-update.service \
-    systemd-sysupdate-update.timer \
+    systemd-sysupdate.service \
+    systemd-sysupdate.timer \
     systemd-sysupdate-reboot.service \
     systemd-sysupdate-reboot.timer; do
     [[ -f "/usr/lib/systemd/system/$current_systemd_unit" ]]
