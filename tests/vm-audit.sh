@@ -179,10 +179,12 @@ else
     systemctl --failed --no-pager || true
     fail 'systemd has no failed units'
 fi
-if [[ -L /run/udev/control ]]; then
-    pass 'the udev compatibility control link is available'
+if [[ -S /run/udev/control ]] &&
+        systemctl is-active --quiet systemd-udevd-control.socket &&
+        timeout 10 udevadm control --ping >/dev/null 2>&1; then
+    pass 'the udev control socket is active and responsive'
 else
-    fail 'the udev compatibility control link is available'
+    fail 'the udev control socket is active and responsive'
 fi
 for unit in \
     authselect-apply-changes.service \
@@ -484,8 +486,14 @@ EOF
     isolated_container=particleos-network-isolation-audit
     isolated_bridge=
     network_isolation_ready=0
-    if [[ $default_bridge =~ ^podman[0-9]+$ ]] &&
-            podman network create --disable-dns "$isolated_network" >/dev/null 2>&1; then
+    network_create_output=
+    network_create_status=1
+    if [[ $default_bridge =~ ^podman[0-9]+$ ]]; then
+        network_create_output=$(podman network create --disable-dns \
+            "$isolated_network" 2>&1)
+        network_create_status=$?
+    fi
+    if ((network_create_status == 0)); then
         isolated_bridge=$(podman network inspect "$isolated_network" \
             --format '{{.NetworkInterface}}' 2>/dev/null || true)
         if [[ $isolated_bridge =~ ^podman[0-9]+$ && $isolated_bridge != "$default_bridge" ]] &&
@@ -496,15 +504,36 @@ EOF
         fi
     fi
 
+    isolation_target=10.0.2.100
+    isolation_port=18443
     nft add element inet particleos_filter workload_egress_tcp4 \
-        "{ \"$default_bridge\" . 1.1.1.1 . 443 }" 2>/dev/null || true
-    if ((network_isolation_ready)) &&
-            timeout 8 podman exec "$health_container" \
-                /bin/nc -z -w 5 1.1.1.1 443 >/dev/null 2>&1 &&
-            ! timeout 8 podman exec "$isolated_container" \
-                /bin/nc -z -w 3 1.1.1.1 443 >/dev/null 2>&1; then
+        "{ \"$default_bridge\" . $isolation_target . $isolation_port }" \
+        2>/dev/null || true
+    default_connect=1
+    isolated_connect=1
+    if [[ -n $health_container ]]; then
+        timeout 8 podman exec "$health_container" \
+            /bin/nc -z -w 5 "$isolation_target" "$isolation_port" \
+            >/dev/null 2>&1
+        default_connect=$?
+    fi
+    if ((network_isolation_ready)); then
+        timeout 8 podman exec "$isolated_container" \
+            /bin/nc -z -w 3 "$isolation_target" "$isolation_port" \
+            >/dev/null 2>&1
+        isolated_connect=$?
+    fi
+    if ((network_isolation_ready && default_connect == 0 && isolated_connect != 0)); then
         pass 'an egress tuple for one Podman bridge grants no authority to another'
     else
+        printf 'bridge isolation diagnostic: default=%q isolated=%q ready=%d default_connect=%d isolated_connect=%d\n' \
+            "$default_bridge" "$isolated_bridge" "$network_isolation_ready" \
+            "$default_connect" "$isolated_connect"
+        printf 'Podman network creation status=%d output=%q\n' \
+            "$network_create_status" "$network_create_output"
+        podman network ls 2>&1 || true
+        ausearch -m AVC -ts boot 2>/dev/null | tail -80 || true
+        nft list set inet particleos_filter workload_egress_tcp4 2>/dev/null || true
         fail 'an egress tuple for one Podman bridge grants no authority to another'
     fi
 
@@ -518,7 +547,7 @@ EOF
         fail 'a forwarding tuple cannot reopen the blocked workload DNS channel'
     fi
     nft delete element inet particleos_filter workload_egress_tcp4 \
-        "{ \"$default_bridge\" . 1.1.1.1 . 443, \"$default_bridge\" . 1.1.1.1 . 53 }" \
+        "{ \"$default_bridge\" . $isolation_target . $isolation_port, \"$default_bridge\" . 1.1.1.1 . 53 }" \
         >/dev/null 2>&1 || true
     podman rm --force "$isolated_container" >/dev/null 2>&1 || true
     podman network rm "$isolated_network" >/dev/null 2>&1 || true

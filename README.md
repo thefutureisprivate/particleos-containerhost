@@ -312,6 +312,10 @@ host DNS proxy or send TCP/UDP port 53 through forwarding, so host resolution
 cannot bypass destination allowlists. Provision fixed endpoint addresses or
 application-level discovery inside the workload trust boundary.
 
+Netavark stores root-owned network definitions under
+`/var/lib/containers/networks` on TPM-encrypted persistent state; the immutable
+vendor configuration under `/etc/containers` is never used as mutable state.
+
 Workload forwarding is expressed through eight sets split by IPv4/IPv6,
 TCP/UDP, and ingress/egress. Every element also carries the exact Podman bridge
 interface, so permission on one network is not reusable from another.

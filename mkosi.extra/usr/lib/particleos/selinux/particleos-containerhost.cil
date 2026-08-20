@@ -70,10 +70,6 @@
   ; is granted to the runtime.
   (allow .gvisor_t .proc_t (file (getattr open read)))
 
-  ; systemd v261 creates the legacy udev control path as a symlink to its
-  ; Varlink socket. Permit PID 1 to create only that policy-typed link class.
-  (allow .init_t .udev_var_run_t (lnk_file (create)))
-
   ; The one immutable OpenPGP key used for update metadata has its own type.
   ; importd may consume it, but cannot modify, relabel, or replace it.
   (allow .systemd_importd_t .particleos_import_key_t

@@ -158,7 +158,7 @@ run_boot() {
             -chardev "socket,id=chrtpm,path=$socket" \
             -tpmdev emulator,id=tpm0,chardev=chrtpm \
             -device tpm-tis,tpmdev=tpm0 \
-            -netdev user,id=net0 \
+            -netdev user,id=net0,guestfwd=tcp:10.0.2.100:18443-cmd:/bin/cat \
             -device virtio-net-pci,netdev=net0 \
             -display "$vm_display" \
             -serial "file:$log" \
