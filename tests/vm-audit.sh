@@ -238,10 +238,11 @@ done
 module_preload_after=$(systemctl show systemd-modules-load.service --property=After --value)
 module_preload_before=$(systemctl show systemd-modules-load.service --property=Before --value)
 if grep -qw systemd-remount-fs.service <<<"$module_preload_after" &&
+        grep -qw systemd-tpm2-setup.service <<<"$module_preload_before" &&
         grep -qw systemd-udev-trigger.service <<<"$module_preload_before"; then
-    pass 'fixed module preload is serialized between remount and coldplug'
+    pass 'fixed module preload is serialized between remount and root-side sysinit'
 else
-    fail 'fixed module preload is serialized between remount and coldplug'
+    fail 'fixed module preload is serialized between remount and root-side sysinit'
 fi
 if [[ $(sysctl -n kernel.modules_disabled) == 1 ]]; then
     pass 'kernel module loading is irreversibly disabled'
