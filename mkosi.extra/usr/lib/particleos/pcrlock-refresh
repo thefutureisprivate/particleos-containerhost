@@ -123,6 +123,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+restore_components() {
+    mv -- "$component" "$failed"
+    if [[ -d $previous ]]; then
+        mv -- "$previous" "$component"
+    fi
+    if [[ -d $obsolete_backup ]]; then
+        mv -- "$obsolete_backup" "$obsolete"
+    fi
+    find "$failed" -maxdepth 1 -type f -delete
+    rmdir "$failed"
+}
+
 for index in "${!ukis[@]}"; do
     /usr/lib/systemd/systemd-pcrlock lock-uki "${ukis[$index]}" \
         --pcrlock="$staging/300-${digests[$index]}.pcrlock"
@@ -152,17 +164,26 @@ if [[ -d $component ]]; then
 fi
 mv -- "$staging" "$component"
 staging=
+
+# systemd v261 deliberately drops requested PCRs whose event-log state is not
+# safe to predict. Preflight the exact machine-readable prediction before
+# make-policy mutates the TPM NV index, and refuse any policy that omits either
+# side of the rollback boundary.
+if ! prediction=$(/usr/lib/systemd/systemd-pcrlock predict \
+        --pcr=7 --pcr=11 --json=short); then
+    restore_components
+    exit 1
+fi
+prediction_compact=${prediction//[[:space:]]/}
+if ! grep -Eq '"pcr":7([,}])' <<<"$prediction_compact" ||
+        ! grep -Eq '"pcr":11([,}])' <<<"$prediction_compact"; then
+    restore_components
+    exit 1
+fi
+
 if ! /usr/lib/systemd/systemd-pcrlock make-policy \
-        --pcr=7 --pcr=11 --strict=yes --force; then
-    mv -- "$component" "$failed"
-    if [[ -d $previous ]]; then
-        mv -- "$previous" "$component"
-    fi
-    if [[ -d $obsolete_backup ]]; then
-        mv -- "$obsolete_backup" "$obsolete"
-    fi
-    find "$failed" -maxdepth 1 -type f -delete
-    rmdir "$failed"
+        --pcr=7 --pcr=11 --force; then
+    restore_components
     exit 1
 fi
 

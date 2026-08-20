@@ -46,7 +46,12 @@ for type in usr usr-verity usr-verity-sig; do
 done
 require_fixed 'Encrypt=tpm2' mkosi.extra/usr/lib/repart.d/40-root.conf 'persistent state is TPM2 encrypted'
 require_fixed 'TPM2PCRs=7' mkosi.extra/usr/lib/repart.d/40-root.conf 'state has a first-boot PCR7 bootstrap token'
-require_fixed '--pcr=7 --pcr=11 --strict=yes --force' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime state policy strictly covers PCR7 and PCR11'
+require_fixed 'systemd-pcrlock predict' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime policy preflights the stable systemd prediction before mutating TPM NV'
+require_fixed '--pcr=7 --pcr=11 --json=short' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'prediction preflight requests exactly PCR7 and PCR11'
+require_fixed '"pcr":7([,}])' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'prediction preflight requires PCR7 to remain safe'
+require_fixed '"pcr":11([,}])' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'prediction preflight requires PCR11 to remain safe'
+require_fixed '--pcr=7 --pcr=11 --force' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime state policy covers PCR7 and PCR11 using stable systemd options'
+reject_fixed '--strict' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime policy does not use the unsupported systemd v261 strict option'
 require_fixed '650-particleos-uki.pcrlock.d' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'UKI records precede the enter-initrd PCR11 barrier'
 require_fixed '750-particleos-uki.pcrlock.d' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'invalid development PCR11 ordering is migrated transactionally'
 require_fixed 'lock-secureboot-policy' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'PCR7 policy is derived from live Secure Boot variables'
