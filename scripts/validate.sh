@@ -212,6 +212,7 @@ require_fixed 'workload_ingress_udp6' "$firewall" 'DNAT UDP ingress requires an 
 require_fixed 'type ifname . ipv4_addr . inet_service' "$firewall" 'IPv4 forwarding policy is scoped to an exact Podman bridge'
 require_fixed 'type ifname . ipv6_addr . inet_service' "$firewall" 'IPv6 forwarding policy is scoped to an exact Podman bridge'
 require_fixed 'iifname . ip daddr . tcp dport @workload_egress_tcp4' "$firewall" 'workload egress lookup includes the ingress bridge'
+require_fixed 'iifname "podman*" return' "$firewall" 'Podman traffic reaches exact forwarding policy after source validation'
 require_fixed 'iifname "podman*" udp dport 53 counter reject' "$firewall" 'workload DNS over UDP is explicitly blocked'
 require_fixed 'iifname "podman*" tcp dport 53 counter reject with tcp reset' "$firewall" 'workload DNS over TCP is explicitly blocked'
 reject_fixed 'iifname "podman*" udp dport 53 accept' "$firewall" 'the host DNS proxy is not a workload exfiltration path'

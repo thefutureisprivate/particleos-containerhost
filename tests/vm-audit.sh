@@ -533,7 +533,7 @@ EOF
             "$network_create_status" "$network_create_output"
         podman network ls 2>&1 || true
         ausearch -m AVC -ts boot 2>/dev/null | tail -80 || true
-        nft list set inet particleos_filter workload_egress_tcp4 2>/dev/null || true
+        nft list table inet particleos_filter 2>/dev/null || true
         fail 'an egress tuple for one Podman bridge grants no authority to another'
     fi
 
