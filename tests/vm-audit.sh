@@ -235,13 +235,13 @@ done
 for module in nft_hash nft_limit; do
     if [[ -d /sys/module/$module ]]; then pass "$module loaded before lockdown"; else fail "$module loaded before lockdown"; fi
 done
-module_preload_before=$(systemctl show particleos-module-preload.service --property=Before --value)
-if systemctl is-active --quiet particleos-module-preload.service &&
-        grep -qw nftables.service <<<"$module_preload_before" &&
-        grep -qw network-pre.target <<<"$module_preload_before"; then
-    pass 'fixed module preload completes before the firewall and network'
+module_preload_after=$(systemctl show systemd-modules-load.service --property=After --value)
+module_preload_before=$(systemctl show systemd-modules-load.service --property=Before --value)
+if grep -qw systemd-remount-fs.service <<<"$module_preload_after" &&
+        grep -qw systemd-udev-trigger.service <<<"$module_preload_before"; then
+    pass 'fixed module preload is serialized between remount and coldplug'
 else
-    fail 'fixed module preload completes before the firewall and network'
+    fail 'fixed module preload is serialized between remount and coldplug'
 fi
 if [[ $(sysctl -n kernel.modules_disabled) == 1 ]]; then
     pass 'kernel module loading is irreversibly disabled'

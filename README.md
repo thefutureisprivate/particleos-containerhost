@@ -128,8 +128,7 @@ Readiness | systemd and Quadlet health gate | Container `HealthCmd=` result
   protection.
 - SELinux enforcing with a dedicated gVisor runtime domain.
 - Signed IPE policy, confidentiality lockdown, mandatory module signatures,
-  deterministic post-mount module preload, and irreversible pre-network module
-  lockdown.
+  serialized coldplug, and irreversible post-boot module lockdown.
 - Rootful Podman with release-pinned gVisor runsc and systrap as the default
   runtime.
 - Signed OCI admission with an exact default-deny policy.

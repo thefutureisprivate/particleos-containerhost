@@ -1,8 +1,8 @@
 [Unit]
 Description=ParticleOS irreversible kernel module lockdown
 DefaultDependencies=no
-Requires=nftables.service particleos-module-preload.service
-After=nftables.service particleos-module-preload.service systemd-sysctl.service systemd-udevd.service
+Requires=nftables.service systemd-modules-load.service
+After=nftables.service systemd-modules-load.service systemd-sysctl.service systemd-udevd.service
 Before=network-pre.target
 ConditionPathIsReadWrite=/proc/sys/kernel/modules_disabled
 
