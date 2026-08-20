@@ -45,6 +45,8 @@ fi
 boot_root=$(bootctl --print-boot-path)
 boot_root=$(realpath -e -- "$boot_root")
 uki_directory="$boot_root/EFI/Linux"
+credential_directory="$boot_root/loader/credentials"
+credential_name="pcrlock.${current_image_id}.cred"
 [[ -d $uki_directory && ! -L $uki_directory ]]
 
 current_uki=$(bootctl --print-stub-path)
@@ -182,7 +184,7 @@ if ! grep -Eq '"pcr":7([,}])' <<<"$prediction_compact" ||
 fi
 
 if ! /usr/lib/systemd/systemd-pcrlock make-policy \
-        --pcr=7 --pcr=11 --force; then
+        --pcr=7 --pcr=11 --entry-token=os-image-id --force; then
     restore_components
     exit 1
 fi
@@ -190,6 +192,23 @@ fi
 policy=/var/lib/systemd/pcrlock.json
 grep -Eq '"pcr"[[:space:]]*:[[:space:]]*7([,}])' "$policy"
 grep -Eq '"pcr"[[:space:]]*:[[:space:]]*11([,}])' "$policy"
+[[ -d $credential_directory && ! -L $credential_directory &&
+   -f $credential_directory/$credential_name &&
+   ! -L $credential_directory/$credential_name ]]
+
+# A stateless image has no stable machine ID before its encrypted state is
+# unlocked. Using systemd-pcrlock's default machine-id entry token would
+# therefore append a differently named EFI credential on every boot. Keep one
+# stable, image-scoped credential and remove only legacy pcrlock credentials
+# after the replacement policy and its boot credential have both committed.
+find "$credential_directory" -mindepth 1 -maxdepth 1 -type f \
+    -name 'pcrlock.*.cred' ! -name "$credential_name" -delete
+mapfile -t boot_credentials < <(
+    find "$credential_directory" -mindepth 1 -maxdepth 1 -type f \
+        -name 'pcrlock.*.cred' -printf '%f\n'
+)
+[[ ${#boot_credentials[@]} -eq 1 &&
+   ${boot_credentials[0]} == "$credential_name" ]]
 
 if [[ -d $previous ]]; then
     find "$previous" -maxdepth 1 -type f -delete

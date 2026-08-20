@@ -25,10 +25,19 @@ component=/var/lib/pcrlock.d/650-particleos-uki.pcrlock.d
 policy=/var/lib/systemd/pcrlock.json
 ready=/var/lib/particleos/pcrlock-update-ready
 project_certificate=/usr/lib/verity.d/_projectcert.crt
+credential_directory="$boot_root/loader/credentials"
 
 [[ -d $uki_directory && ! -L $uki_directory ]]
 [[ -d $component && ! -L $component ]]
 [[ -f $policy && ! -L $policy ]]
+[[ -d $credential_directory && ! -L $credential_directory ]]
+
+mapfile -t pcrlock_credentials < <(
+    find "$credential_directory" -mindepth 1 -maxdepth 1 -type f \
+        -name 'pcrlock.*.cred' -printf '%f\n'
+)
+[[ ${#pcrlock_credentials[@]} -eq 1 &&
+   ${pcrlock_credentials[0]} == "pcrlock.${IMAGE_ID}.cred" ]]
 
 mapfile -t component_files < <(
     find "$component" -mindepth 1 -maxdepth 1 -type f -name '*.pcrlock' -print | sort

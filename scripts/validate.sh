@@ -57,7 +57,10 @@ require_fixed 'systemd-pcrlock predict' mkosi.extra/usr/lib/particleos/pcrlock-r
 require_fixed '--pcr=7 --pcr=11 --json=short' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'prediction preflight requests exactly PCR7 and PCR11'
 require_fixed '"pcr":7([,}])' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'prediction preflight requires PCR7 to remain safe'
 require_fixed '"pcr":11([,}])' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'prediction preflight requires PCR11 to remain safe'
-require_fixed '--pcr=7 --pcr=11 --force' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime state policy covers PCR7 and PCR11 using stable systemd options'
+require_fixed '--pcr=7 --pcr=11 --entry-token=os-image-id --force' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime state policy covers PCR7 and PCR11 with a stable image-scoped boot credential'
+require_fixed "-name 'pcrlock.*.cred' ! -name \"\$credential_name\" -delete" mkosi.extra/usr/lib/particleos/pcrlock-refresh 'obsolete transient-machine-ID pcrlock credentials are retired after policy commit'
+# shellcheck disable=SC2016
+require_fixed '[[ ${#boot_credentials[@]} -eq 1' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'pcrlock policy refresh proves exactly one stable EFI boot credential remains'
 reject_fixed '--strict' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime policy does not use the unsupported systemd v261 strict option'
 require_fixed '650-particleos-uki.pcrlock.d' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'UKI records precede the enter-initrd PCR11 barrier'
 require_fixed '750-particleos-uki.pcrlock.d' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'invalid development PCR11 ordering is migrated transactionally'

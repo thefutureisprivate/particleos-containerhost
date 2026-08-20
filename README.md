@@ -163,8 +163,10 @@ than a post-install checklist.
   project-signed UKI fails its embedded `IMAGE_VERSION` check.
 - **Strict boot credentials:** the signed command line sets
   `systemd.credentials_boot_policy=strict`. The public pcrlock policy envelope
-  follows systemd's dedicated loader and is matched to the LUKS token's SRK
-  and NV handles before use.
+  follows systemd's dedicated loader, uses the stable image ID rather than a
+  transient machine ID as its entry token, and is matched to the LUKS token's
+  SRK and NV handles before use. Policy refreshes retain exactly one
+  image-scoped EFI credential.
 - **Mandatory access control:** Fedora targeted SELinux stays enforcing.
   Podman runs in `container_runtime_t`; authenticated gVisor executables
   transition into `gvisor_t`, which receives only the systrap-specific ptrace,
@@ -552,7 +554,7 @@ unlock and repeats the signed-container path. Every guest and TPM emulator
 stops after success or failure. A successful audit boot prints:
 
 ```text
-PARTICLEOS_VM_AUDIT_PASS checks=93
+PARTICLEOS_VM_AUDIT_PASS checks=94
 ```
 
 Set `VM_AUDIT_KEEP_FAILED=1` to retain a failed guest disk and serial logs for

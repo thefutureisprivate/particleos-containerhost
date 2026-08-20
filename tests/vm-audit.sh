@@ -135,6 +135,16 @@ if grep -Eq '"pcr"[[:space:]]*:[[:space:]]*7([,}])' /var/lib/systemd/pcrlock.jso
 else
     fail 'the TPM NV policy strictly covers Secure Boot and the booted UKI'
 fi
+mapfile -t pcrlock_credentials < <(
+    find /efi/loader/credentials -mindepth 1 -maxdepth 1 -type f \
+        -name 'pcrlock.*.cred' -printf '%f\n'
+)
+if [[ ${#pcrlock_credentials[@]} -eq 1 &&
+        ${pcrlock_credentials[0]} == 'pcrlock.ParticleOS-Host.cred' ]]; then
+    pass 'exactly one stable image-scoped pcrlock boot credential is active'
+else
+    fail 'exactly one stable image-scoped pcrlock boot credential is active'
+fi
 unit=systemd-cryptsetup@root.service
 if [[ $(systemctl show --property=Result --value "$unit" 2>/dev/null) == success ]]; then
     pass "$unit completed successfully"
