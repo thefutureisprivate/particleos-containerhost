@@ -24,13 +24,7 @@ PROMPTS = (
         b"run0 --no-ask-password --pipe /usr/bin/true && "
         b"echo PARTICLEOS_FIRSTBOOT_CONSOLE_FAIL run0-accepted-without-auth || "
         b"echo PARTICLEOS_RUN0_NOAUTH_DENIED; "
-        b"run0 --pipe /usr/bin/bash -c 'test \"$(/usr/bin/id -u)\" = 0 && "
-        b"! /usr/sbin/ausearch -m AVC -ts boot 2>/dev/null | "
-        b"/usr/bin/grep -Eiq \"homed|homework|fsadm|policykit|run0|login\" && "
-        b"/usr/sbin/ausearch -m USER_AUTH,USER_ACCT -ts boot 2>/dev/null | "
-        b"/usr/bin/grep -q \"acct=\\\"particleadmin\\\"\"' && "
-        b"echo PARTICLEOS_FIRSTBOOT_CONSOLE_PASS "
-        b"user=particleadmin timezone=Etc/UTC run0=authenticated; exit\n",
+        b"run0 --pipe /usr/bin/bash /run/particleos-firstboot-run0-audit; exit\n",
     ),
     (b"Password:", b"ParticleOS-Test-Run0-261!\n"),
 )

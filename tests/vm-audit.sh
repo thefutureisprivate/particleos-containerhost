@@ -256,7 +256,7 @@ if PASSWORD="$admin_password" homectl activate "$admin" >/dev/null 2>&1; then
     home_context=$(stat -c '%C' "/home/$admin" 2>/dev/null || true)
     if [[ ,$home_options, == *,nosuid,* && ,$home_options, == *,nodev,* &&
             ,$home_options, == *,noexec,* &&
-            $home_context == system_u:object_r:user_home_dir_t:s0 ]]; then
+            $home_context == system_u:object_r:user_home_t:s0 ]]; then
         pass 'the administrator home mounts nosuid,nodev,noexec with its SELinux label'
     else
         printf 'home options=%q context=%q\n' "$home_options" "$home_context"
@@ -266,8 +266,9 @@ if PASSWORD="$admin_password" homectl activate "$admin" >/dev/null 2>&1; then
 else
     fail 'the administrator home mounts nosuid,nodev,noexec with its SELinux label'
 fi
-homed_avc=$(ausearch -m AVC -ts boot 2>/dev/null |
-    grep -Ei 'homed|homework|policykit|run0' || true)
+homed_avc=$(journalctl --boot --no-pager --output=cat _TRANSPORT=audit \
+    2>/dev/null |
+    grep -Ei 'avc:.*denied.*(homed|homework|policykit|run0)' || true)
 if [[ -z $homed_avc ]]; then
     pass 'homed and run0 completed without SELinux denials'
 else
@@ -604,7 +605,8 @@ EOF
         printf 'Podman network creation status=%d output=%q\n' \
             "$network_create_status" "$network_create_output"
         podman network ls 2>&1 || true
-        ausearch -m AVC -ts boot 2>/dev/null | tail -80 || true
+        journalctl --boot --no-pager --output=cat _TRANSPORT=audit |
+            grep -Ei 'avc:.*denied' | tail -80 || true
         nft list table inet particleos_filter 2>/dev/null || true
         fail 'an egress tuple for one Podman bridge grants no authority to another'
     fi

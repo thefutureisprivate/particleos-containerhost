@@ -4,6 +4,7 @@ set -euo pipefail
 
 readonly username=particleadmin
 readonly password='ParticleOS-Test-Run0-261!'
+readonly run0_audit=/run/particleos-firstboot-run0-audit
 
 fail() {
     printf 'PARTICLEOS_FIRSTBOOT_CONSOLE_FAIL %s\n' "$*"
@@ -39,8 +40,9 @@ home_context=$(stat -c '%C' "/home/$username")
    ,$home_options, == *,nodev,* &&
    ,$home_options, == *,noexec,* ]] ||
     fail 'home mount flags are not restrictive'
-[[ $home_context == system_u:object_r:user_home_dir_t:s0 ]] || {
-    printf 'home options=%q context=%q\n' "$home_options" "$home_context"
+[[ $home_context == system_u:object_r:user_home_t:s0 ]] || {
+    printf 'home context=%q\n' "$home_context"
+    printf 'home options=%q\n' "$home_options"
     fail 'home root has the wrong SELinux label'
 }
 printf '%s\n' 'printf "PARTICLEOS_ADMIN_SHELL_READY\\n"' \
@@ -51,8 +53,39 @@ chown "$username:" "/home/$username/.bash_profile"
 chmod 0600 "/home/$username/.bash_profile"
 homectl deactivate "$username" >/dev/null 2>&1 || true
 
-homed_avc=$(ausearch -m AVC -ts boot 2>/dev/null |
-    grep -Ei 'homed|homework|fsadm|policykit|run0' || true)
+cat >"$run0_audit" <<'EOF'
+#!/usr/bin/bash
+set -euo pipefail
+
+fail() {
+    printf 'PARTICLEOS_FIRSTBOOT_CONSOLE_FAIL %s\n' "$*"
+    sleep 2
+    exit 1
+}
+
+[[ $(/usr/bin/id -u) == 0 ]] || fail 'run0 did not enter uid 0'
+audit_records=$(/usr/bin/journalctl --boot --no-pager --output=cat \
+    _TRANSPORT=audit 2>/dev/null || true)
+avc=$(/usr/bin/grep -Ei 'avc:.*denied.*(homed|homework|fsadm|policykit|run0|login)' \
+    <<<"$audit_records" || true)
+[[ -z $avc ]] || {
+    printf '%s\n' "$avc"
+    fail 'homed, login, or run0 generated an SELinux denial'
+}
+authentication=$(/usr/bin/grep -Ei \
+    'acct="?particleadmin"?.*(polkit-agent-helper|polkit-1).*(res|result)=success|(polkit-agent-helper|polkit-1).*acct="?particleadmin"?.*(res|result)=success' \
+    <<<"$audit_records" || true)
+[[ -n $authentication ]] || {
+    printf '%s\n' "$audit_records"
+    fail 'run0 authentication is absent from the kernel audit trail'
+}
+printf 'PARTICLEOS_FIRSTBOOT_CONSOLE_PASS user=particleadmin timezone=Etc/UTC run0=authenticated\n'
+EOF
+chmod 0700 "$run0_audit"
+
+homed_avc=$(journalctl --boot --no-pager --output=cat _TRANSPORT=audit \
+    2>/dev/null |
+    grep -Ei 'avc:.*denied.*(homed|homework|fsadm|policykit|run0)' || true)
 [[ -z $homed_avc ]] || {
     printf '%s\n' "$homed_avc"
     fail 'homed or run0 generated an SELinux denial'

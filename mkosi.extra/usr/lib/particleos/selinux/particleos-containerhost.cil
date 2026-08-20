@@ -105,6 +105,9 @@
   ; /usr is authenticated but nosuid, so preserve that existing transition
   ; instead of allowing the homed worker to execute mkfs in its own domain.
   (allow .systemd_homework_t .fsadm_t (process2 (nosuid_transition)))
+  ; The fsck helper probes the kernel pidfs mount while homed prepares a fresh
+  ; encrypted filesystem. Permit metadata discovery only.
+  (allow .systemd_homework_t .pidfs_t (filesystem (getattr)))
   (allow .getty_t .local_login_t (process2 (nosuid_transition)))
   (allow .init_t .unconfined_t (process2 (nosuid_transition)))
   (allow .local_login_t .unconfined_t (process2 (nosuid_transition)))
