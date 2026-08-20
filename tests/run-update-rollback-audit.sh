@@ -100,7 +100,7 @@ audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
 pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
 boot_diagnostic_service=$(base64 -w0 "$repository/tests/boot-audit-diagnostic.conf")
 boot_diagnostic_script=$(base64 -w0 "$repository/tests/boot-audit-diagnostic")
-health_service=$(base64 -w0 "$repository/tests/update-rollback-health.service")
+health_dropin=$(base64 -w0 "$repository/tests/update-rollback-health.conf")
 health_script=$(base64 -w0 "$repository/tests/update-rollback-health.sh")
 base_credential=$(printf '%s\n' "$base_version" | base64 -w0)
 candidate_credential=$(printf '%s\n' "$candidate_version" | base64 -w0)
@@ -238,7 +238,7 @@ run_guest() {
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service" \
         -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.particleos-workload-health.service=$health_service" \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-workload-health.service~90-particleos-update-audit=$health_dropin" \
         -smbios "type=11,value=io.systemd.credential.binary:update-rollback-audit=$audit_script" \
         -smbios "type=11,value=io.systemd.credential.binary:update-rollback-health=$health_script" \
         -smbios "type=11,value=io.systemd.credential.binary:update-audit-scenario=$scenario_credential" \
