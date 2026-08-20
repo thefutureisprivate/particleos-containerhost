@@ -5,6 +5,26 @@ set -euo pipefail
 marker=/var/lib/particleos/pcrlock-update-ready
 policy=/var/lib/systemd/pcrlock.json
 [[ -s $marker && -s $policy ]]
-read -r label expected extra <"$marker"
-[[ $label == pcrlock-policy-sha256 && -z ${extra:-} ]]
-[[ $(sha256sum -- "$policy" | cut -d ' ' -f1) == "$expected" ]]
+read -r policy_label policy_digest version_label candidate_version \
+    uki_label candidate_digest extra <"$marker"
+[[ $policy_label == pcrlock-policy-sha256 &&
+   $version_label == candidate-version &&
+   $uki_label == candidate-uki-sha256 &&
+   -z ${extra:-} ]]
+[[ $candidate_version =~ ^[0-9]+([.][0-9]+)*$ ]]
+[[ $candidate_digest =~ ^[0-9a-f]{64}$ ]]
+[[ $(sha256sum -- "$policy" | cut -d ' ' -f1) == "$policy_digest" ]]
+systemd-sysupdate pending
+
+boot_root=$(realpath -e -- "$(bootctl --print-boot-path)")
+uki_directory="$boot_root/EFI/Linux"
+declare -a candidates=()
+while IFS= read -r -d '' candidate; do
+    name=${candidate##*/}
+    if [[ $name =~ ^ParticleOS-Host_${candidate_version}_x86-64(\+[0-9]+(-[0-9]+)?)?\.efi$ ]]; then
+        candidates+=("$candidate")
+    fi
+done < <(find "$uki_directory" -maxdepth 1 -type f \
+    -name "ParticleOS-Host_${candidate_version}_x86-64*.efi" -print0)
+[[ ${#candidates[@]} -eq 1 ]]
+[[ $(sha256sum -- "${candidates[0]}" | cut -d ' ' -f1) == "$candidate_digest" ]]

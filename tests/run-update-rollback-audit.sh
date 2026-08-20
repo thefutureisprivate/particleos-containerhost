@@ -238,7 +238,7 @@ run_guest() {
     qemu_active=0
     stop_tpm
 
-    if [[ $expectation == clean ]]; then
+    if [[ $expectation == clean || $expectation == enrollment ]]; then
         if ((status != 0)); then
             tail -240 "$log" >&2 || true
             echo "$scenario boot $boot_number did not power off or reboot cleanly" >&2
@@ -248,6 +248,13 @@ run_guest() {
             tail -240 "$log" >&2 || true
             echo "$scenario boot $boot_number failed a guest-side audit assertion" >&2
             return 1
+        fi
+        if [[ $expectation == enrollment ]]; then
+            grep -q 'PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED ' "$log" || {
+                tail -240 "$log" >&2 || true
+                echo "$scenario bootstrap-enrollment boot did not stage the retained PCR 7 token" >&2
+                return 1
+            }
         fi
     else
         if ((status != 124)); then
@@ -270,6 +277,7 @@ run_guest() {
 
 echo "Testing blessed-candidate revocation: $base_version -> $candidate_version"
 prepare_scenario rollback-denial
+run_guest rollback-denial 0 enrollment
 run_guest rollback-denial 1 clean
 grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 denial_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
@@ -284,6 +292,7 @@ echo 'UPDATE_ROLLBACK_AUDIT_DENIAL_PASS superseded signed UKI could not unlock p
 
 echo "Testing health-triggered A/B fallback: $candidate_version -> $base_version"
 prepare_scenario health-fallback
+run_guest health-fallback 0 enrollment
 run_guest health-fallback 1 clean
 grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 fallback_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")

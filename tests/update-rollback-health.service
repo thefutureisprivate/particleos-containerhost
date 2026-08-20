@@ -1,8 +1,9 @@
 [Unit]
 Description=ParticleOS rollback audit workload-health fault injector
 ConditionPathExists=!/etc/initrd-release
+ConditionPathExists=/sys/firmware/efi/efivars/LoaderBootCountPath-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
 After=multi-user.target
-Before=boot-complete.target
+Before=systemd-bless-boot.service
 FailureAction=reboot
 
 [Service]
@@ -17,4 +18,4 @@ StandardError=tty
 TTYPath=/dev/ttyS0
 
 [Install]
-RequiredBy=boot-complete.target
+RequiredBy=systemd-bless-boot.service

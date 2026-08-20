@@ -2,15 +2,46 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-[[ $# -eq 1 ]] || {
-    echo "usage: $0 current|all" >&2
+usage() {
+    echo "usage: $0 current|candidate VERSION" >&2
     exit 2
 }
-[[ $1 == current || $1 == all ]] || {
-    echo "usage: $0 current|all" >&2
-    exit 2
-}
+
+[[ $# -ge 1 ]] || usage
 mode=$1
+case $mode in
+    current)
+        [[ $# -eq 1 ]] || usage
+        ;;
+    candidate)
+        [[ $# -eq 2 ]] || usage
+        candidate_version=$2
+        [[ $candidate_version =~ ^[0-9]+([.][0-9]+)*$ ]] || usage
+        ;;
+    *)
+        usage
+        ;;
+esac
+
+read_release_field() {
+    local file=$1 key=$2 value
+    value=$(sed -n "s/^${key}=//p" "$file")
+    [[ $value != *$'\n'* ]]
+    value=${value%\"}
+    value=${value#\"}
+    [[ $value =~ ^[A-Za-z0-9._-]+$ ]]
+    printf '%s\n' "$value"
+}
+
+current_version=$(read_release_field /etc/os-release IMAGE_VERSION)
+current_image_id=$(read_release_field /etc/os-release IMAGE_ID)
+[[ $current_version =~ ^[0-9]+([.][0-9]+)*$ ]]
+[[ $current_image_id == ParticleOS-Host ]]
+if [[ $mode == candidate ]]; then
+    newest=$(printf '%s\n%s\n' "$current_version" "$candidate_version" | sort -V | tail -n1)
+    [[ $candidate_version == "$newest" && $candidate_version != "$current_version" ]]
+fi
+
 boot_root=$(bootctl --print-boot-path)
 boot_root=$(realpath -e -- "$boot_root")
 uki_directory="$boot_root/EFI/Linux"
@@ -23,15 +54,46 @@ fi
 current_uki=$(realpath -e -- "$current_uki")
 [[ $current_uki == "$uki_directory/"* && -f $current_uki && ! -L $current_uki ]]
 
-if [[ $mode == current ]]; then
-    ukis=("$current_uki")
-else
-    mapfile -d '' ukis < <(
-        find "$uki_directory" -maxdepth 1 -type f \
-            -name 'ParticleOS-Host_*.efi' -print0 | sort -z
-    )
+declare -a ukis=() digests=()
+validate_uki() {
+    local uki=$1 expected_version=$2 resolved digest osrelease image_id image_version
+    resolved=$(realpath -e -- "$uki")
+    [[ $resolved == "$uki_directory/"* && -f $resolved && ! -L $resolved ]]
+    [[ $(bootctl kernel-identify "$resolved") == uki ]]
+    sbverify --cert /usr/lib/verity.d/_projectcert.crt "$resolved" >/dev/null
+
+    osrelease=$(mktemp /run/particleos-uki-osrelease.XXXXXXXX)
+    if ! objcopy --dump-section ".osrel=$osrelease" "$resolved" >/dev/null 2>&1; then
+        rm -f -- "$osrelease"
+        return 1
+    fi
+    image_id=$(read_release_field "$osrelease" IMAGE_ID)
+    image_version=$(read_release_field "$osrelease" IMAGE_VERSION)
+    rm -f -- "$osrelease"
+    [[ $image_id == "$current_image_id" && $image_version == "$expected_version" ]]
+
+    digest=$(sha256sum -- "$resolved")
+    digest=${digest%% *}
+    ukis+=("$resolved")
+    digests+=("$digest")
+}
+
+validate_uki "$current_uki" "$current_version"
+
+if [[ $mode == candidate ]]; then
+    declare -a candidate_ukis=()
+    while IFS= read -r -d '' candidate; do
+        candidate_name=${candidate##*/}
+        if [[ $candidate_name =~ ^ParticleOS-Host_${candidate_version}_x86-64(\+[0-9]+(-[0-9]+)?)?\.efi$ ]]; then
+            candidate_ukis+=("$candidate")
+        fi
+    done < <(find "$uki_directory" -maxdepth 1 -type f \
+        -name "ParticleOS-Host_${candidate_version}_x86-64*.efi" -print0)
+    [[ ${#candidate_ukis[@]} -eq 1 ]]
+    candidate_uki=${candidate_ukis[0]}
+    validate_uki "$candidate_uki" "$candidate_version"
+    candidate_digest=${digests[1]}
 fi
-[[ ${#ukis[@]} -ge 1 && ${#ukis[@]} -le 2 ]]
 
 component_parent=/var/lib/pcrlock.d
 component="$component_parent/650-particleos-uki.pcrlock.d"
@@ -50,20 +112,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for uki in "${ukis[@]}"; do
-    resolved=$(realpath -e -- "$uki")
-    [[ $resolved == "$uki_directory/"* && -f $resolved && ! -L $resolved ]]
-    [[ $(bootctl kernel-identify "$resolved") == uki ]]
-    sbverify --cert /usr/lib/verity.d/_projectcert.crt "$resolved" >/dev/null
-    digest=$(sha256sum -- "$resolved")
-    digest=${digest%% *}
-    /usr/lib/systemd/systemd-pcrlock lock-uki "$resolved" \
-        --pcrlock="$staging/300-$digest.pcrlock"
+for index in "${!ukis[@]}"; do
+    /usr/lib/systemd/systemd-pcrlock lock-uki "${ukis[$index]}" \
+        --pcrlock="$staging/300-${digests[$index]}.pcrlock"
 done
 
 # PCR 7 is authorized from the platform's live Secure Boot variables, while
-# lock-uki contributes the signed UKI measurements needed for PCR 11.  Both
-# inputs are local and TPM-backed; no public, reusable policy is shipped.
+# lock-uki contributes only the booted UKI and an authenticated fresh update
+# candidate to PCR 11. No ESP-wide enumeration is used as an authority.
 /usr/lib/systemd/systemd-pcrlock lock-secureboot-policy
 /usr/lib/systemd/systemd-pcrlock lock-secureboot-authority
 
@@ -111,11 +167,12 @@ if [[ -d $obsolete_backup ]]; then
     find "$obsolete_backup" -maxdepth 1 -type f -delete
     rmdir "$obsolete_backup"
 fi
-if [[ $mode == all && ${#ukis[@]} -eq 2 ]]; then
-    {
-        printf 'pcrlock-policy-sha256 '
-        sha256sum -- "$policy" | cut -d ' ' -f1
-    } >/var/lib/particleos/pcrlock-update-ready
+if [[ $mode == candidate ]]; then
+    policy_digest=$(sha256sum -- "$policy")
+    policy_digest=${policy_digest%% *}
+    printf 'pcrlock-policy-sha256 %s candidate-version %s candidate-uki-sha256 %s\n' \
+        "$policy_digest" "$candidate_version" "$candidate_digest" \
+        >/var/lib/particleos/pcrlock-update-ready
     chmod 0600 /var/lib/particleos/pcrlock-update-ready
 else
     rm -f -- /var/lib/particleos/pcrlock-update-ready

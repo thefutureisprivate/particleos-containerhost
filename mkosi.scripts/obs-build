@@ -2,13 +2,20 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
+sources=/usr/src/packages/SOURCES
+repository=$sources/particleos-containerhost
+[[ -x $repository/scripts/validate.sh ]] || {
+    echo "Repository security validation is unavailable" >&2
+    exit 1
+}
+"$repository/scripts/validate.sh"
+
 resource_dir="$(/usr/bin/python3 -c '
 from pathlib import Path
 import mkosi.resources
 print(Path(mkosi.resources.__file__).parent / "mkosi-obs")
 ')"
 upstream_helper="$resource_dir/mkosi.build"
-sources=/usr/src/packages/SOURCES
 output=/work/src/usr/src/packages/OTHER
 
 [[ -x "$upstream_helper" ]] || {

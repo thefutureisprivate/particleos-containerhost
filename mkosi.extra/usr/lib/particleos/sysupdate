@@ -1,0 +1,27 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+candidate_json=$(systemd-sysupdate --json=short check-new)
+if [[ $candidate_json == '{"available":null}' ]]; then
+    exit 0
+fi
+[[ $candidate_json =~ ^\{"available":"([0-9]+([.][0-9]+)*)"\}$ ]]
+candidate_version=${BASH_REMATCH[1]}
+
+current_version=$(sed -n -E \
+    's/^IMAGE_VERSION="?([0-9]+([.][0-9]+)*)"?$/\1/p' \
+    /etc/os-release)
+[[ $current_version =~ ^[0-9]+([.][0-9]+)*$ ]]
+newest=$(printf '%s\n%s\n' "$current_version" "$candidate_version" | sort -V | tail -n1)
+[[ $candidate_version == "$newest" && $candidate_version != "$current_version" ]]
+
+# A stale readiness record must never authorize a partial replacement. The
+# exact version is selected from systemd-sysupdate's authenticated metadata,
+# installed with Verify=yes, then independently matched to the signed UKI's
+# embedded IMAGE_VERSION before PCR 11 is extended.
+rm -f -- /var/lib/particleos/pcrlock-update-ready
+systemd-sysupdate update "$candidate_version"
+systemd-sysupdate pending
+/usr/lib/particleos/pcrlock-refresh candidate "$candidate_version"
+/usr/lib/particleos/pcrlock-update-ready

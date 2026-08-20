@@ -11,7 +11,7 @@ source /usr/lib/os-release
 [[ $base_version =~ ^[0-9]+([.][0-9]+)*$ ]]
 [[ ${IMAGE_VERSION:-} =~ ^[0-9]+([.][0-9]+)*$ ]]
 
-if [[ $scenario == health-fallback && $IMAGE_VERSION != "$base_version" ]]; then
+if [[ $scenario == health-fallback ]]; then
     echo "UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT version=$IMAGE_VERSION"
     exit 1
 fi

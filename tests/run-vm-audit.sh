@@ -120,6 +120,7 @@ audit_script=$(base64 -w0 "$repository/tests/vm-audit.sh")
 
 run_boot() {
     local boot_number=$1
+    local expectation=$2
     local log=$scratch/boot-$boot_number.log
     local socket=$scratch/tpm-$boot_number.sock
 
@@ -168,17 +169,26 @@ run_boot() {
     qemu_active=0
     stop_tpm
 
-    if ! grep -q '^PARTICLEOS_VM_AUDIT_PASS ' "$log" ||
-            grep -q '^PARTICLEOS_VM_AUDIT_FAIL ' "$log"; then
-        tail -240 "$log" >&2 || true
-        echo "VM audit boot $boot_number failed" >&2
-        return 1
+    if [[ $expectation == enrollment ]]; then
+        if grep -q 'PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED ' "$log" &&
+                ! grep -q '^PARTICLEOS_VM_AUDIT_FAIL ' "$log"; then
+            grep 'PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED ' "$log" | tail -n1
+            return 0
+        fi
+    elif grep -q '^PARTICLEOS_VM_AUDIT_PASS ' "$log" &&
+            ! grep -q '^PARTICLEOS_VM_AUDIT_FAIL ' "$log"; then
+        grep '^PARTICLEOS_VM_AUDIT_PASS ' "$log"
+        return 0
     fi
-    grep '^PARTICLEOS_VM_AUDIT_PASS ' "$log"
+    tail -240 "$log" >&2 || true
+    echo "VM audit boot $boot_number failed" >&2
+    return 1
 }
 
-echo 'Running fresh-state Secure Boot, TPM enrollment, and signed-container audit...'
-run_boot 1
+echo 'Staging PCR 7+11 enrollment while retaining the PCR 7 bootstrap token...'
+run_boot 1 enrollment
+echo 'Proving the PCR 7+11 token on a later boot before retiring bootstrap...'
+run_boot 2 audit
 echo 'Running persistent TPM-unlock and signed-container audit with the same state...'
-run_boot 2
-echo 'ParticleOS two-boot VM audit passed; both guests and TPM emulators are stopped.'
+run_boot 3 audit
+echo 'ParticleOS three-boot VM audit passed; all guests and TPM emulators are stopped.'

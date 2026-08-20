@@ -107,10 +107,11 @@ if [[ -b $state ]]; then pass 'persistent state partition exists'; else fail 'pe
 luks_metadata=$(cryptsetup luksDump --dump-json-metadata "$state" 2>/dev/null || true)
 luks_metadata_compact=$(tr -d '[:space:]' <<<"$luks_metadata")
 if grep -qF '"tpm2_pcrlock":true' <<<"$luks_metadata_compact" &&
-        ! grep -qF '"tpm2-pcrs":[7]' <<<"$luks_metadata_compact"; then
-    pass 'the PCR7 bootstrap token was replaced by an NV pcrlock token'
+        ! grep -qF '"tpm2-pcrs":[7]' <<<"$luks_metadata_compact" &&
+        [[ ! -e /var/lib/particleos/pcrlock-enrollment-pending ]]; then
+    pass 'a later boot proved PCR7+11 before the PCR7 bootstrap token was retired'
 else
-    fail 'the PCR7 bootstrap token was replaced by an NV pcrlock token'
+    fail 'a later boot proved PCR7+11 before the PCR7 bootstrap token was retired'
 fi
 if grep -Eq '"pcr"[[:space:]]*:[[:space:]]*7([,}])' /var/lib/systemd/pcrlock.json &&
         grep -Eq '"pcr"[[:space:]]*:[[:space:]]*11([,}])' /var/lib/systemd/pcrlock.json &&
@@ -147,12 +148,14 @@ if [[ $(systemctl is-enabled systemd-sysupdate-reboot.timer 2>/dev/null) == enab
 else
     fail 'staged updates have an automatic reboot timer'
 fi
-if systemctl is-active --quiet particleos-workload-health.service &&
-        systemctl show -p Requires --value systemd-bless-boot.service |
-            grep -qw particleos-workload-health.service; then
-    pass 'boot blessing is gated by the workload-health service'
+if [[ $(systemctl is-enabled particleos-workload-health.service 2>/dev/null) == disabled ]] &&
+        ! systemctl show -p Requires --value systemd-bless-boot.service |
+            grep -qw particleos-workload-health.service &&
+        systemctl cat particleos-workload-health.service |
+            grep -qF 'ConditionPathExists=/sys/firmware/efi/efivars/LoaderBootCountPath-'; then
+    pass 'workload health is opt-in and can reject only counted candidates'
 else
-    fail 'boot blessing is gated by the workload-health service'
+    fail 'workload health is opt-in and can reject only counted candidates'
 fi
 
 if [[ -z $(systemctl --failed --no-legend --plain) ]]; then
@@ -202,6 +205,21 @@ if ! grep -qF 'iifname "podman*" accept' <<<"$forward_policy" &&
     pass 'workload forwarding has no blanket Podman accept rule'
 else
     fail 'workload forwarding has no blanket Podman accept rule'
+fi
+if nft list set inet particleos_filter workload_egress_tcp4 |
+        grep -qF 'type ifname . ipv4_addr . inet_service' &&
+        grep -qF 'iifname . ip daddr . tcp dport @workload_egress_tcp4' \
+            <<<"$forward_policy"; then
+    pass 'workload egress authority is scoped to an exact Podman bridge'
+else
+    fail 'workload egress authority is scoped to an exact Podman bridge'
+fi
+if grep -qF 'iifname "podman*" udp dport 53' <<<"$forward_policy" &&
+        grep -qF 'iifname "podman*" tcp dport 53' <<<"$forward_policy" &&
+        ! grep -qE 'dport 53.*accept' <<<"$forward_policy"; then
+    pass 'workload DNS is explicitly blocked before egress allowlists'
+else
+    fail 'workload DNS is explicitly blocked before egress allowlists'
 fi
 for set in \
     workload_egress_tcp4 workload_egress_udp4 \
@@ -414,6 +432,8 @@ EOF
     if [[ ${#health_containers[@]} -eq 1 ]]; then
         health_container=${health_containers[0]}
     fi
+    # SELinux context inspection is not available through pgrep.
+    # shellcheck disable=SC2009
     gvisor_processes=$(ps -eZ 2>/dev/null |
         grep -E '[[:space:]]+(runsc|exe|gvisor_sentry)$' || true)
     if [[ -n $health_container && -n $gvisor_processes ]] &&
@@ -433,6 +453,51 @@ EOF
         fail 'an unlisted workload destination is denied by default'
     fi
 
+    default_bridge=$(podman network inspect podman \
+        --format '{{.NetworkInterface}}' 2>/dev/null || true)
+    isolated_network=particleos-audit-isolated
+    isolated_container=particleos-network-isolation-audit
+    isolated_bridge=
+    network_isolation_ready=0
+    if [[ $default_bridge =~ ^podman[0-9]+$ ]] &&
+            podman network create --disable-dns "$isolated_network" >/dev/null 2>&1; then
+        isolated_bridge=$(podman network inspect "$isolated_network" \
+            --format '{{.NetworkInterface}}' 2>/dev/null || true)
+        if [[ $isolated_bridge =~ ^podman[0-9]+$ && $isolated_bridge != "$default_bridge" ]] &&
+                timeout 45 podman run --detach --name "$isolated_container" \
+                    --network "$isolated_network" --pull=never "$image_id" \
+                    /bin/sleep 90 >/dev/null 2>&1; then
+            network_isolation_ready=1
+        fi
+    fi
+
+    nft add element inet particleos_filter workload_egress_tcp4 \
+        "{ \"$default_bridge\" . 1.1.1.1 . 443 }" 2>/dev/null || true
+    if ((network_isolation_ready)) &&
+            timeout 8 podman exec "$health_container" \
+                /bin/nc -z -w 5 1.1.1.1 443 >/dev/null 2>&1 &&
+            ! timeout 8 podman exec "$isolated_container" \
+                /bin/nc -z -w 3 1.1.1.1 443 >/dev/null 2>&1; then
+        pass 'an egress tuple for one Podman bridge grants no authority to another'
+    else
+        fail 'an egress tuple for one Podman bridge grants no authority to another'
+    fi
+
+    nft add element inet particleos_filter workload_egress_tcp4 \
+        "{ \"$default_bridge\" . 1.1.1.1 . 53 }" 2>/dev/null || true
+    if [[ -n $health_container ]] &&
+            ! timeout 8 podman exec "$health_container" \
+                /bin/nc -z -w 3 1.1.1.1 53 >/dev/null 2>&1; then
+        pass 'a forwarding tuple cannot reopen the blocked workload DNS channel'
+    else
+        fail 'a forwarding tuple cannot reopen the blocked workload DNS channel'
+    fi
+    nft delete element inet particleos_filter workload_egress_tcp4 \
+        "{ \"$default_bridge\" . 1.1.1.1 . 443, \"$default_bridge\" . 1.1.1.1 . 53 }" \
+        >/dev/null 2>&1 || true
+    podman rm --force "$isolated_container" >/dev/null 2>&1 || true
+    podman network rm "$isolated_network" >/dev/null 2>&1 || true
+
     sed -i 's/^Notify=healthy$/Notify=false/' "$health_quadlet"
     if ! /usr/lib/particleos/check-workload-health >/dev/null 2>&1; then
         pass 'a workload without health-gated readiness blocks blessing'
@@ -444,6 +509,8 @@ else
     fail 'a healthy rootful Quadlet satisfies the boot health gate'
     fail 'live gVisor sandbox processes run in gvisor_t'
     fail 'an unlisted workload destination is denied by default'
+    fail 'an egress tuple for one Podman bridge grants no authority to another'
+    fail 'a forwarding tuple cannot reopen the blocked workload DNS channel'
     fail 'a workload without health-gated readiness blocks blessing'
 fi
 if [[ -n $image_id ]] && systemctl stop vm-health.service >/dev/null 2>&1 &&

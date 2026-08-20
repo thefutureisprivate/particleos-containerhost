@@ -6,11 +6,12 @@ ConditionPathExists=/dev/tpmrm0
 ConditionPathExists=!/var/lib/particleos/pcrlock-enrolled
 After=local-fs.target systemd-cryptsetup@root.service
 Before=boot-complete.target
-FailureAction=reboot
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+TimeoutStartSec=infinity
+TimeoutStopSec=15s
 ExecStart=/usr/lib/particleos/pcrlock-enroll
 
 [Install]

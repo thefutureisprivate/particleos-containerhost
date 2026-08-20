@@ -3,21 +3,85 @@
 set -euo pipefail
 
 state=/dev/disk/by-partlabel/ParticleOS-Host-root
-marker=/var/lib/particleos/pcrlock-enrolled
+state_directory=/var/lib/particleos
+marker=$state_directory/pcrlock-enrolled
+pending=$state_directory/pcrlock-enrollment-pending
 [[ -b $state && ! -e $marker ]]
+install -d -m 0700 "$state_directory"
 
-/usr/lib/particleos/pcrlock-refresh current
-/usr/bin/systemd-cryptenroll \
-    --unlock-tpm2-device=auto \
-    --tpm2-device=auto \
-    --tpm2-pcrs= \
-    --tpm2-pcrlock=/var/lib/systemd/pcrlock.json \
-    --wipe-slot=tpm2 \
-    "$state"
+declare -a pcrlock_tokens=() bootstrap_tokens=()
+scan_tokens() {
+    local id token compact
+    pcrlock_tokens=()
+    bootstrap_tokens=()
+    for id in {0..31}; do
+        token=$(cryptsetup token export --token-id "$id" "$state" 2>/dev/null) || continue
+        compact=${token//[[:space:]]/}
+        [[ $compact == *'"type":"systemd-tpm2"'* ]] || continue
+        if [[ $compact == *'"tpm2_pcrlock":true'* ]]; then
+            pcrlock_tokens+=("$id")
+        elif [[ $compact == *'"tpm2-pcrs":[7]'* ]]; then
+            bootstrap_tokens+=("$id")
+        fi
+    done
+}
 
-metadata=$(cryptsetup luksDump --dump-json-metadata "$state")
-compact=${metadata//[[:space:]]/}
-[[ $compact == *'"tpm2_pcrlock":true'* ]]
-[[ $compact != *'"tpm2-pcrs":[7]'* ]]
-install -d -m 0700 /var/lib/particleos
+enroll_pcrlock() {
+    /usr/bin/systemd-cryptenroll \
+        --unlock-tpm2-device=auto \
+        --tpm2-device=auto \
+        --tpm2-pcrs= \
+        --tpm2-pcrlock=/var/lib/systemd/pcrlock.json \
+        "$@" \
+        "$state"
+}
+
+if [[ ! -e $pending ]]; then
+    /usr/lib/particleos/pcrlock-refresh current
+    scan_tokens
+    [[ ${#bootstrap_tokens[@]} -ge 1 ]]
+    if [[ ${#pcrlock_tokens[@]} -eq 0 ]]; then
+        enroll_pcrlock
+        scan_tokens
+    fi
+    [[ ${#pcrlock_tokens[@]} -ge 1 && ${#bootstrap_tokens[@]} -ge 1 ]]
+    read -r boot_id </proc/sys/kernel/random/boot_id
+    printf 'pcrlock-bootstrap-pending %s token-id %s\n' \
+        "$boot_id" "${pcrlock_tokens[0]}" >"$pending"
+    chmod 0600 "$pending"
+    echo "PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED boot=$boot_id token=${pcrlock_tokens[0]}"
+
+    # Keep the required boot-complete dependency active until shutdown has
+    # started. The next boot must prove the exact PCR 7+11 token before any
+    # TPM2 enrollment is removed.
+    systemctl --no-block reboot
+    while :; do
+        sleep 1h
+    done
+fi
+
+read -r pending_label previous_boot token_label token_id extra <"$pending"
+[[ $pending_label == pcrlock-bootstrap-pending &&
+   $previous_boot =~ ^[0-9a-f-]{36}$ &&
+   $token_label == token-id &&
+   $token_id =~ ^[0-9]+$ &&
+   -z ${extra:-} ]]
+read -r current_boot </proc/sys/kernel/random/boot_id
+[[ $current_boot != "$previous_boot" ]]
+
+token=$(cryptsetup token export --token-id "$token_id" "$state")
+compact=${token//[[:space:]]/}
+[[ $compact == *'"type":"systemd-tpm2"'* &&
+   $compact == *'"tpm2_pcrlock":true'* ]]
+cryptsetup open --type luks2 --test-passphrase --token-only \
+    --token-id "$token_id" "$state"
+echo "PARTICLEOS_PCRLOCK_NEXT_BOOT_PROVED boot=$current_boot token=$token_id"
+
+# The tested token has now unsealed under the next boot's actual PCR 7+11
+# state. Enroll first and atomically wipe every older TPM2 slot, leaving the
+# newly created pcrlock token as the sole automatic unlock path.
+enroll_pcrlock --wipe-slot=tpm2
+scan_tokens
+[[ ${#pcrlock_tokens[@]} -eq 1 && ${#bootstrap_tokens[@]} -eq 0 ]]
 install -m 0600 /dev/null "$marker"
+rm -f -- "$pending"

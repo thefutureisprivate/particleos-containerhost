@@ -48,12 +48,20 @@ check_policy_pcrs() {
 }
 
 check_ready_marker() {
-    local actual_hash extra label recorded_hash
-    read -r label recorded_hash extra <"$ready"
-    [[ $label == pcrlock-policy-sha256 && -z ${extra:-} ]]
+    local actual_hash extra policy_label recorded_hash version_label recorded_version
+    local uki_label recorded_uki_hash
+    read -r policy_label recorded_hash version_label recorded_version \
+        uki_label recorded_uki_hash extra <"$ready"
+    [[ $policy_label == pcrlock-policy-sha256 &&
+       $version_label == candidate-version &&
+       $recorded_version == "$candidate_version" &&
+       $uki_label == candidate-uki-sha256 &&
+       $recorded_uki_hash =~ ^[0-9a-f]{64}$ &&
+       -z ${extra:-} ]]
     actual_hash=$(sha256sum -- "$policy")
     actual_hash=${actual_hash%% *}
     [[ $recorded_hash == "$actual_hash" ]]
+    /usr/lib/particleos/pcrlock-update-ready
 }
 
 write_state() {
@@ -84,6 +92,28 @@ initial)
     available_version=$(systemd-sysupdate check-new)
     [[ $available_version == "$candidate_version" ]]
     echo "UPDATE_ROLLBACK_AUDIT_AVAILABLE version=$available_version"
+    if [[ $scenario == health-fallback ]]; then
+        systemctl enable particleos-workload-health.service
+        systemctl is-enabled --quiet particleos-workload-health.service
+    fi
+
+    # Reproduce the former ESP-enumeration bypass: an offline attacker can
+    # rename an older project-signed UKI to the fresh candidate's filename.
+    # Embedded release matching must reject it before the PCR policy changes.
+    replayed_candidate="$uki_directory/ParticleOS-Host_${candidate_version}_x86-64.efi"
+    cp -- "$current_stub" "$replayed_candidate"
+    if /usr/lib/particleos/pcrlock-refresh candidate "$candidate_version"; then
+        echo 'UPDATE_ROLLBACK_AUDIT_OLD_UKI_BYPASS'
+        exit 1
+    fi
+    rm -f -- "$replayed_candidate"
+    [[ ! -e $ready ]]
+    mapfile -t component_files < <(
+        find "$component" -mindepth 1 -maxdepth 1 -type f -name '*.pcrlock' -print | sort
+    )
+    [[ ${#component_files[@]} -eq 1 ]]
+    echo "UPDATE_ROLLBACK_AUDIT_OLD_UKI_REJECT version=$candidate_version"
+
     systemctl start --wait systemd-sysupdate-update.service
     journalctl --no-pager --output=short-monotonic \
         -u systemd-sysupdate-update.service >&2 || true
