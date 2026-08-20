@@ -81,6 +81,18 @@ actual_certificate_fingerprint=$(openssl x509 -in "$scratch/project-cert.crt" \
 [[ $actual_certificate_fingerprint == "$expected_certificate_fingerprint" ]]
 sbverify --cert "$scratch/project-cert.crt" "$uki"
 
+# Authenticate the actual initial-installation boot path, not just the
+# separately published UKI. The full disk's ESP copy must be byte-identical and
+# independently pass PE signature verification.
+zstd --sparse -q -d -f -o "$scratch/disk.raw" "$disk"
+esp_offset=$(systemd-repart --json=short "$scratch/disk.raw" |
+    jq -r '.[] | select(.type == "esp") | .offset')
+[[ $esp_offset =~ ^[0-9]+$ ]]
+mcopy -i "$scratch/disk.raw@@$esp_offset" \
+    "::EFI/Linux/${uki##*/}" "$scratch/embedded-uki.efi"
+cmp -- "$uki" "$scratch/embedded-uki.efi"
+sbverify --cert "$scratch/project-cert.crt" "$scratch/embedded-uki.efi"
+
 image_id="$(sed -n 's/^IMAGE_ID=//p' "$os_release" | tr -d '"')"
 image_version="$(sed -n 's/^IMAGE_VERSION=//p' "$os_release" | tr -d '"')"
 [[ "$image_id" == ParticleOS-Host && "$image_version" =~ ^[0-9]+\.[0-9]+$ ]]
@@ -140,4 +152,4 @@ grep -qxF 'Type=root' "$runtime/40-root.conf"
 grep -qxF 'Encrypt=tpm2' "$runtime/40-root.conf"
 grep -qxF 'TPM2PCRs=7' "$runtime/40-root.conf"
 
-echo 'Authenticated checksums, verified UKI, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'
+echo 'Authenticated checksums, verified standalone and disk-embedded UKIs, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'

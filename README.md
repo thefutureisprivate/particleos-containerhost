@@ -460,8 +460,18 @@ Prepare the disposable signed OCI fixture:
 ./tests/prepare-signed-container-fixture.sh /path/to/container-fixture.raw
 ```
 
-Then run the complete local VM audit with an OVMF variable store containing
-the enrolled OBS project certificate:
+Create a fresh test variable store from the authenticated release. This first
+verifies the signed release manifest and UKI against the repository-pinned OBS
+keys, then enrolls only the authenticated project certificate into OVMF's
+PK, KEK and db databases:
+
+```console
+./tests/prepare-ovmf-vars.sh \
+  /path/to/artifacts \
+  /path/to/enrolled-ovmf-vars.bin
+```
+
+Then run the complete local VM audit:
 
 ```console
 ./tests/run-vm-audit.sh \

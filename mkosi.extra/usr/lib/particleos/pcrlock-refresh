@@ -55,21 +55,32 @@ current_uki=$(realpath -e -- "$current_uki")
 [[ $current_uki == "$uki_directory/"* && -f $current_uki && ! -L $current_uki ]]
 
 declare -a ukis=() digests=()
+read_uki_identity() (
+    set -euo pipefail
+    local uki=$1 scratch image_id image_version
+    scratch=$(mktemp -d /run/particleos-uki-identity.XXXXXXXX)
+    trap 'rm -rf -- "$scratch"' EXIT
+
+    # GNU objcopy rewrites its input in place when no output operand is given,
+    # which strips the Authenticode certificate table from a signed UKI. Always
+    # provide a disposable output while dumping the embedded os-release.
+    objcopy --dump-section ".osrel=$scratch/osrelease" \
+        "$uki" "$scratch/uki.copy" >/dev/null 2>&1
+    image_id=$(read_release_field "$scratch/osrelease" IMAGE_ID)
+    image_version=$(read_release_field "$scratch/osrelease" IMAGE_VERSION)
+    printf '%s %s\n' "$image_id" "$image_version"
+)
+
 validate_uki() {
-    local uki=$1 expected_version=$2 resolved digest osrelease image_id image_version
+    local uki=$1 expected_version=$2 resolved digest identity image_id image_version extra
     resolved=$(realpath -e -- "$uki")
     [[ $resolved == "$uki_directory/"* && -f $resolved && ! -L $resolved ]]
     [[ $(bootctl kernel-identify "$resolved") == uki ]]
     sbverify --cert /usr/lib/verity.d/_projectcert.crt "$resolved" >/dev/null
 
-    osrelease=$(mktemp /run/particleos-uki-osrelease.XXXXXXXX)
-    if ! objcopy --dump-section ".osrel=$osrelease" "$resolved" >/dev/null 2>&1; then
-        rm -f -- "$osrelease"
-        return 1
-    fi
-    image_id=$(read_release_field "$osrelease" IMAGE_ID)
-    image_version=$(read_release_field "$osrelease" IMAGE_VERSION)
-    rm -f -- "$osrelease"
+    identity=$(read_uki_identity "$resolved")
+    read -r image_id image_version extra <<<"$identity"
+    [[ -z ${extra:-} ]]
     [[ $image_id == "$current_image_id" && $image_version == "$expected_version" ]]
 
     digest=$(sha256sum -- "$resolved")

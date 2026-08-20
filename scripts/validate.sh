@@ -51,7 +51,11 @@ require_fixed '650-particleos-uki.pcrlock.d' mkosi.extra/usr/lib/particleos/pcrl
 require_fixed '750-particleos-uki.pcrlock.d' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'invalid development PCR11 ordering is migrated transactionally'
 require_fixed 'lock-secureboot-policy' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'PCR7 policy is derived from live Secure Boot variables'
 # shellcheck disable=SC2016
-require_fixed 'objcopy --dump-section ".osrel=$osrelease"' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'candidate authorization verifies the UKI embedded release identity'
+require_fixed 'objcopy --dump-section ".osrel=$scratch/osrelease"' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'candidate authorization verifies the UKI embedded release identity'
+# shellcheck disable=SC2016
+require_fixed '"$uki" "$scratch/uki.copy"' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime UKI identity inspection cannot rewrite the signed ESP input'
+# shellcheck disable=SC2016
+reject_fixed 'objcopy --dump-section ".osrel=$osrelease" "$resolved"' mkosi.extra/usr/lib/particleos/pcrlock-refresh 'runtime UKI inspection never invokes objcopy without a disposable output'
 # shellcheck disable=SC2016
 require_fixed 'pcrlock-refresh candidate "$candidate_version"' mkosi.extra/usr/lib/particleos/sysupdate 'only the authenticated sysupdate candidate is admitted'
 reject_fixed 'pcrlock-refresh all' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate.service.d/40-particleos-egress.conf 'updates never authorize an ESP-wide UKI enumeration'
@@ -217,6 +221,16 @@ require_fixed 'FailureAction=poweroff' tests/vm-audit.service 'failed VM audits 
 # shellcheck disable=SC2016
 require_fixed '--sign-identity "$signed_identity"' tests/prepare-signed-container-fixture.sh 'VM fixture signs an exact OCI identity'
 require_fixed 'busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23' tests/prepare-signed-container-fixture.sh 'VM fixture source is immutable by default'
+# Literal implementation strings, not expressions for this validator.
+# shellcheck disable=SC2016
+require_fixed '"$repository/scripts/validate-artifacts.sh" "$artifact_directory"' tests/prepare-ovmf-vars.sh 'OVMF trust enrollment begins with independent release authentication'
+# shellcheck disable=SC2016
+require_fixed '--set-pk "$owner"' tests/prepare-ovmf-vars.sh 'the VM Secure Boot owner key is the authenticated project certificate'
+# shellcheck disable=SC2016
+require_fixed '--add-kek "$owner"' tests/prepare-ovmf-vars.sh 'the VM Secure Boot exchange key is the authenticated project certificate'
+# shellcheck disable=SC2016
+require_fixed '--add-db "$owner"' tests/prepare-ovmf-vars.sh 'the VM Secure Boot allow database contains the authenticated project certificate'
+reject_fixed 'microsoft' tests/prepare-ovmf-vars.sh 'the test Secure Boot trust store has no unrelated vendor authority'
 require_fixed 'policy-wrong.json' tests/prepare-signed-container-fixture.sh 'VM fixture carries an unrelated negative-test trust root'
 # shellcheck disable=SC2016
 require_fixed 'skopeo --policy "$host_policy" copy' tests/prepare-signed-container-fixture.sh 'VM fixture verifies its signature before packaging'
@@ -279,6 +293,8 @@ require_fixed 'sha256sum -- "${artifact_names[@]}"' mkosi.scripts/obs-build 'che
 require_fixed 'sha256sum -c "${checksum_manifest##*/}"' scripts/validate-artifacts.sh 'artifact validation verifies the published checksum manifest'
 require_fixed 'gpgv --keyring' scripts/validate-artifacts.sh 'artifact validation authenticates the checksum digest with the pinned OBS key'
 require_fixed 'sbverify --cert' scripts/validate-artifacts.sh 'artifact validation cryptographically verifies the UKI PE signature'
+# shellcheck disable=SC2016
+require_fixed 'cmp -- "$uki" "$scratch/embedded-uki.efi"' scripts/validate-artifacts.sh 'initial installation authenticates the UKI embedded in the published disk'
 require_fixed 'etc/ipe/ipe-policy\.p7b' scripts/validate-artifacts.sh 'artifact validation inspects the signed UKI for the IPE policy'
 require_fixed 'particleos-containerhost-repart-archive' mkosi.scripts/obs-build 'the OBS signing stage uses the hostile-input archive policy'
 require_fixed 'upstream_sources=/usr/src/packages/SOURCES' mkosi.scripts/obs-build 'the stable mkosi signer reads only the validated staged source closure'
