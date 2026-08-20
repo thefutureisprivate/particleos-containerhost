@@ -217,6 +217,7 @@ require_fixed 'multi-user.target.wants/systemd-homed.service' mkosi.finalize 'ho
 require_fixed 'systemd-homed.service.wants/systemd-homed-firstboot.service' mkosi.finalize 'homed provisioning is immutable across A/B updates'
 require_fixed '.systemd_homework_t .container_runtime_t .gvisor_t' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'only homed and container helpers receive user-namespace creation'
 require_fixed '(allow .systemd_homed_t .systemd_homework_t (process2 (nosuid_transition)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'homed enters its confined worker from nosuid verified /usr'
+require_fixed '(allow .systemd_homework_t .fsadm_t (process2 (nosuid_transition)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'the homed worker enters Fedora fsadm only for filesystem creation'
 require_fixed '(allow .policykit_auth_t .systemd_homed_t (dbus (send_msg)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'run0 PAM authentication can talk to homed'
 run0_policy=mkosi.extra/usr/share/polkit-1/rules.d/10-particleos-run0.rules
 require_fixed 'org.freedesktop.systemd1.manage-units' "$run0_policy" 'run0 systemd authority is explicitly governed'

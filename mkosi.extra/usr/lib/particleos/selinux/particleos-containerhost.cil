@@ -101,6 +101,10 @@
   (allow .sshd_keygen_t .ssh_keygen_t (process2 (nosuid_transition)))
   (allow .sshd_keygen_t .setfiles_t (process2 (nosuid_transition)))
   (allow .systemd_homed_t .systemd_homework_t (process2 (nosuid_transition)))
+  ; systemd-homework delegates only filesystem creation to Fedora's fsadm_t.
+  ; /usr is authenticated but nosuid, so preserve that existing transition
+  ; instead of allowing the homed worker to execute mkfs in its own domain.
+  (allow .systemd_homework_t .fsadm_t (process2 (nosuid_transition)))
   (allow .getty_t .local_login_t (process2 (nosuid_transition)))
   (allow .init_t .unconfined_t (process2 (nosuid_transition)))
   (allow .local_login_t .unconfined_t (process2 (nosuid_transition)))

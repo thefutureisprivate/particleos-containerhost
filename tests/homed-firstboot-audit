@@ -11,17 +11,23 @@ fi
 
 # Noninteractive credentials are confined to the disposable VM audit. Mirror
 # every security-relevant property of the production native firstboot command.
-NEWPASSWORD="$password" homectl create "$username" \
-    --member-of=wheel,systemd-journal \
-    --storage=luks \
-    --fs-type=btrfs \
-    --disk-size=1G \
-    --auto-resize-mode=off \
-    --luks-discard=yes \
-    --nosuid=yes \
-    --nodev=yes \
-    --noexec=yes \
-    --enforce-password-policy=yes
+if ! NEWPASSWORD="$password" SYSTEMD_LOG_LEVEL=debug homectl create "$username" \
+        --member-of=wheel,systemd-journal \
+        --storage=luks \
+        --fs-type=btrfs \
+        --disk-size=1G \
+        --auto-resize-mode=off \
+        --luks-discard=yes \
+        --nosuid=yes \
+        --nodev=yes \
+        --noexec=yes \
+        --enforce-password-policy=yes; then
+    systemctl status --no-pager systemd-homed.service systemd-homed-firstboot.service || true
+    journalctl --boot --no-pager -u systemd-homed.service \
+        -u systemd-homed-firstboot.service -t systemd-homework | tail -240 || true
+    ausearch -m AVC -ts boot 2>/dev/null | tail -120 || true
+    exit 1
+fi
 
 homectl inspect "$username" >/dev/null
 [[ -f /home/$username.home ]]
