@@ -223,7 +223,10 @@ require_fixed 'Requires=particleos-module-preload.service' mkosi.extra/usr/lib/s
 require_fixed 'Requires=nftables.service particleos-module-preload.service' mkosi.extra/usr/lib/systemd/system/particleos-module-lockdown.service 'irreversible lockdown requires both firewall and fixed modules'
 reject_fixed '/usr/lib/modules-load.d/particleos.conf' mkosi.extra/usr/lib/particleos/load-modules 'container-only modules are not loaded in the boot-critical generic sysinit loader'
 reject_fixed 'nft delete table inet particleos_filter' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall startup has no expected deletion error'
+# Literal implementation strings, not expressions for this validator.
+# shellcheck disable=SC2016
 require_fixed '"$root_skeleton/boot"' mkosi.finalize 'the factory root provides a boot mountpoint for GPT auto-discovery'
+# shellcheck disable=SC2016
 require_fixed '"$root_skeleton/efi"' mkosi.finalize 'the factory root provides the preferred ESP mountpoint'
 require_fixed 'LoadCredential=vm-audit' tests/vm-audit-getty.conf 'VM audit is injected without modifying the image'
 require_fixed 'SuccessAction=poweroff' tests/vm-audit-getty.conf 'successful VM audits power off the guest'
@@ -259,6 +262,7 @@ require_fixed 'getsebool deny_ptrace' tests/vm-audit.sh 'VM audit verifies the g
 require_fixed 'the immutable update trust key has an importd-readable label' tests/vm-audit.sh 'VM audit verifies update-key SELinux access'
 require_fixed 'the udev compatibility control link is available' tests/vm-audit.sh 'VM audit verifies the udev control path'
 require_fixed 'bootctl --print-boot-path' tests/vm-audit.sh 'VM audit asks the boot manager for its active ESP path'
+# shellcheck disable=SC2016
 require_fixed 'mountpoint -q "$boot_path"' tests/vm-audit.sh 'VM audit proves the ESP is mounted rather than a plain directory'
 require_fixed 'systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit' tests/run-vm-audit.sh 'VM runner replaces the generated primary console command with the audit'
 require_fixed 'systemd.unit-dropin.preset-global.service~90-particleos-audit' tests/run-vm-audit.sh 'first-boot preset completion explicitly starts the injected audit unit'
