@@ -329,6 +329,7 @@ reject_fixed 'After=multi-user.target' tests/update-rollback-audit-getty.conf 'u
 reject_fixed 'particleos-workload-health.service' tests/update-rollback-audit-getty.conf 'update scenarios control optional health without an activation-cycle dependency'
 require_fixed 'systemd.extra-unit.particleos-workload-health.service' tests/run-update-rollback-audit.sh 'rollback audit injects counted-deployment workload-health failure'
 require_fixed 'UPDATE_ROLLBACK_AUDIT_OLD_UKI_REJECT' tests/update-rollback-audit.sh 'rollback audit reproduces and rejects renamed old signed UKI admission'
+require_fixed 'UPDATE_ROLLBACK_AUDIT_JSON' tests/update-rollback-audit.sh 'update audit verifies stable systemd machine-readable candidate metadata'
 require_fixed 'systemctl status --no-pager --full systemd-sysupdate.service' tests/update-rollback-audit.sh 'update audit preserves the production service failure cause'
 require_fixed 'run_guest rollback-denial 0 enrollment' tests/run-update-rollback-audit.sh 'update audit preserves bootstrap through a separate enrollment boot'
 require_fixed 'for boot_number in 2 3 4' tests/run-update-rollback-audit.sh 'rollback audit exhausts the candidate boot-count budget'

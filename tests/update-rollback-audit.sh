@@ -92,6 +92,9 @@ initial)
     available_version=$(systemd-sysupdate check-new)
     [[ $available_version == "$candidate_version" ]]
     echo "UPDATE_ROLLBACK_AUDIT_AVAILABLE version=$available_version"
+    candidate_json=$(systemd-sysupdate --json=short check-new)
+    [[ $candidate_json == "{\"available\":\"${candidate_version}\"}" ]]
+    echo "UPDATE_ROLLBACK_AUDIT_JSON version=$candidate_version"
     if [[ $scenario == health-fallback ]]; then
         systemctl enable particleos-workload-health.service
         systemctl is-enabled --quiet particleos-workload-health.service
