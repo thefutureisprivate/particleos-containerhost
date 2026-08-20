@@ -125,6 +125,10 @@ audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
 pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
 boot_diagnostic_service=$(base64 -w0 "$repository/tests/boot-audit-diagnostic.conf")
 boot_diagnostic_script=$(base64 -w0 "$repository/tests/boot-audit-diagnostic")
+homed_firstboot_dropin=$(base64 -w0 "$repository/tests/homed-firstboot-audit.conf")
+homed_firstboot_audit=$(base64 -w0 "$repository/tests/homed-firstboot-audit")
+root_password=$(printf particleos | base64 -w0)
+firstboot_timezone=$(printf Etc/UTC | base64 -w0)
 
 run_boot() {
     local boot_number=$1
@@ -170,6 +174,10 @@ run_boot() {
             -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
             -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service" \
             -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script" \
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit=$homed_firstboot_dropin" \
+            -smbios "type=11,value=io.systemd.credential.binary:homed-firstboot-audit=$homed_firstboot_audit" \
+            -smbios "type=11,value=io.systemd.credential.binary:passwd.plaintext-password.root=$root_password" \
+            -smbios "type=11,value=io.systemd.credential.binary:firstboot.timezone=$firstboot_timezone" \
             -smbios "type=11,value=io.systemd.credential.binary:vm-audit=$audit_script"; then
         qemu_active=0
         stop_tpm

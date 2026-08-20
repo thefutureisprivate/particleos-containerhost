@@ -3,7 +3,25 @@
 set -euo pipefail
 
 authselect select local --force
-usermod --password '!' root
+authselect enable-feature with-systemd-homed
+
+# systemd-firstboot recognizes this sentinel and replaces it only after the
+# operator enters the recovery-only root password twice at the system console.
+usermod --password '!unprovisioned' root
+grep -q '^root:!unprovisioned:' /etc/shadow
+
+# The supported cold-boot SSH path resolves the public key from the signed
+# homed record, then uses the fallback shell to unlock the LUKS home.
+[[ -x /usr/bin/homectl ]]
+[[ -e /usr/bin/systemd-home-fallback-shell ]]
+homectl --help | grep -F 'adopt PATH' >/dev/null
+
+# run0 authenticates through polkit's root, socket-activated PAM helper.
+for polkit_helper_unit in \
+    polkit-agent-helper.socket \
+    polkit-agent-helper@.service; do
+    [[ -f "/usr/lib/systemd/system/$polkit_helper_unit" ]]
+done
 
 # Rootless Podman is intentionally unsupported. Keep the namespace capacity
 # that privileged runsc needs, but remove subordinate-ID delegation entirely.
@@ -67,10 +85,28 @@ if [[ -d /etc/pam.d ]]; then
     find /etc/pam.d -mindepth 1 -exec mv -- {} /usr/lib/pam.d/ \;
     rmdir /etc/pam.d
 fi
+
+# pam_unix can validate homed's exported shadow hash but cannot activate the
+# password-encrypted home. Run pam_systemd_home first for console, SSH fallback
+# shell, and run0 authentication.
+for pam_stack in /usr/lib/pam.d/system-auth /usr/lib/pam.d/password-auth; do
+    sed --in-place \
+        '/^auth[[:space:]].*pam_systemd_home\.so[[:space:]]*$/d' "$pam_stack"
+    sed --in-place \
+        '/^auth[[:space:]].*pam_unix\.so/i auth        sufficient                                   pam_systemd_home.so' \
+        "$pam_stack"
+done
+
 find /usr/lib/pam.d -mindepth 1 -type f -exec sed --in-place \
     -e '/pam_shells\.so/d' \
     -e '/pam_securetty\.so/d' \
     -e '/pam_systemd_loadkey\.so/d' {} \;
+
+# Enable Fedora's packaged systemd-userdb AuthorizedKeysCommand so sshd can
+# verify the key in the signed homed identity before the home is unlocked.
+[[ -f /usr/lib/tmpfiles.d/20-systemd-userdb.conf.example ]]
+ln --symbolic --force 20-systemd-userdb.conf.example \
+    /usr/lib/tmpfiles.d/20-systemd-userdb.conf
 
 ln --symbolic --force multi-user.target /usr/lib/systemd/system/default.target
 install --directory --owner=root --group=root --mode=0700 /var/lib/containers

@@ -56,7 +56,7 @@
   (typeattributeset userns_restricted_domain
     (and (.domain)
       (not (.init_t .kernel_t .systemd_importd_t
-            .container_runtime_t .gvisor_t))))
+            .systemd_homework_t .container_runtime_t .gvisor_t))))
   (deny userns_restricted_domain self (user_namespace (create)))
   (allow .gvisor_t self (user_namespace (create)))
   ; runsc normalizes the ownership of inherited service stdio before entering
@@ -100,6 +100,7 @@
   (allow .udev_t .lvm_t (process2 (nosuid_transition)))
   (allow .sshd_keygen_t .ssh_keygen_t (process2 (nosuid_transition)))
   (allow .sshd_keygen_t .setfiles_t (process2 (nosuid_transition)))
+  (allow .systemd_homed_t .systemd_homework_t (process2 (nosuid_transition)))
   (allow .getty_t .local_login_t (process2 (nosuid_transition)))
   (allow .init_t .unconfined_t (process2 (nosuid_transition)))
   (allow .local_login_t .unconfined_t (process2 (nosuid_transition)))
@@ -110,6 +111,19 @@
   (allow .unconfined_t .chronyc_t (process2 (nosuid_transition)))
   (allow .policykit_auth_t .chkpwd_t (process2 (nosuid_transition)))
   (allow .init_t .chkpwd_t (process2 (nosuid_transition)))
+
+  ; Fedora login, PAM, polkit, and SSH domains query systemd-userdbd while
+  ; resolving homed users. The base policy omits the socket inode read used by
+  ; the current Varlink client. pam_systemd_home in polkit's private helper
+  ; also talks to homed and writes only the returned inhibition pipe.
+  (allow .local_login_t .systemd_userdbd_runtime_t (sock_file (read)))
+  (allow .chkpwd_t .systemd_userdbd_runtime_t (sock_file (read)))
+  (allow .policykit_t .systemd_userdbd_runtime_t (sock_file (read)))
+  (allow .policykit_auth_t .systemd_userdbd_runtime_t (sock_file (read)))
+  (allow .sshd_session_t .systemd_userdbd_runtime_t (sock_file (read)))
+  (allow .policykit_auth_t .systemd_homed_t (dbus (send_msg)))
+  (allow .systemd_homed_t .policykit_auth_t (dbus (send_msg)))
+  (allow .policykit_auth_t .systemd_homed_runtime_pipe_t (fifo_file (write)))
 
   ; Host workloads have no reason to use these kernel protocol families.
   ; Protocols implemented inside gVisor remain available to a guest without

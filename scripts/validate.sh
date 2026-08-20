@@ -29,7 +29,7 @@ require_fixed 'enforcing=1' mkosi.conf 'SELinux enforcement is on the signed com
 require_fixed 'lockdown=confidentiality' mkosi.conf 'kernel lockdown is enforced'
 require_fixed 'module.sig_enforce=1' mkosi.conf 'kernel module signatures are enforced'
 require_fixed 'rootflags=nosuid,nodev,noexec' mkosi.conf 'persistent state is mounted noexec'
-require_fixed 'systemd.firstboot=headless' mkosi.conf 'first boot is unattended without disabling noninteractive provisioning'
+reject_fixed 'systemd.firstboot=headless' mkosi.conf 'the signed command line permits the native console provisioning flow'
 require_fixed 'systemd.credentials_boot_policy=strict' mkosi.conf 'null-key boot credentials are rejected by the signed UKI'
 require_fixed 'rd.systemd.mask=systemd-tpm2-setup-early.service' mkosi.conf 'the unused initrd NvPCR setup path is suppressed'
 require_fixed 'Include=mkosi-obs' mkosi.obs.conf 'upstream OBS signer is included'
@@ -177,10 +177,12 @@ require_fixed '(allow .initrc_t .container_runtime_t (process2 (nosuid_transitio
 require_fixed '/usr/lib/systemd/import-pubring\.pgp -- system_u:object_r:particleos_import_key_t:s0' mkosi.postinst.chroot 'the immutable update key receives only its dedicated label'
 require_fixed 'SELINUX=enforcing' mkosi.extra/etc/selinux/config 'SELinux is enforcing in userspace'
 require_fixed 'authselect select local --force' mkosi.postinst.chroot 'Fedora local authentication profile is explicit'
+require_fixed 'authselect enable-feature with-systemd-homed' mkosi.postinst.chroot 'Fedora PAM enables systemd-homed authentication'
+require_fixed "usermod --password '!unprovisioned' root" mkosi.postinst.chroot 'root begins with the systemd-firstboot password sentinel'
+require_fixed 'pam_systemd_home\.so' mkosi.postinst.chroot 'PAM activates password-encrypted homed users'
+require_fixed '20-systemd-userdb.conf.example' mkosi.postinst.chroot 'the packaged homed SSH userdb integration is enabled'
 for unit in \
     authselect-apply-changes.service \
-    systemd-homed.service \
-    systemd-homed-firstboot.service \
     systemd-tpm2-setup-early.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
@@ -189,6 +191,44 @@ for unit in \
     systemd-sysupdate-notify-pcrlock.socket; do
     require_fixed "$unit" mkosi.finalize "$unit is immutably masked"
 done
+for unit in systemd-homed.service systemd-homed-firstboot.service; do
+    require_fixed "enable $unit" mkosi.extra/usr/lib/systemd/system-preset/10-particleos.preset "$unit is enabled"
+    reject_fixed "    $unit \\" mkosi.finalize "$unit is not immutably masked"
+done
+firstboot_dropin=mkosi.extra/usr/lib/systemd/system/systemd-firstboot.service.d/40-particleos.conf
+homed_firstboot_dropin=mkosi.extra/usr/lib/systemd/system/systemd-homed-firstboot.service.d/40-particleos.conf
+require_fixed 'ConditionFirstBoot=' "$firstboot_dropin" 'interrupted root and timezone provisioning resumes'
+require_fixed 'ExecStart=/usr/bin/systemd-firstboot --prompt-root-password --mute-console=yes' "$firstboot_dropin" 'the console asks for the recovery root password first'
+require_fixed 'ExecStart=/usr/bin/systemd-firstboot --prompt-timezone --mute-console=yes' "$firstboot_dropin" 'the console asks for timezone second'
+require_fixed 'ConditionFirstBoot=' "$homed_firstboot_dropin" 'interrupted homed provisioning resumes'
+require_fixed 'Requires=systemd-firstboot.service' "$homed_firstboot_dropin" 'homed provisioning follows root and timezone setup'
+require_fixed 'After=systemd-firstboot.service' "$homed_firstboot_dropin" 'the administrator prompt is ordered after system setup'
+require_fixed '--prompt-new-user --prompt-shell=no --prompt-groups=no' "$homed_firstboot_dropin" 'the native homed wizard asks only for username and password'
+require_fixed '--member-of=wheel,systemd-journal' "$homed_firstboot_dropin" 'the native user is the run0 and journal administrator'
+require_fixed '--storage=luks' "$homed_firstboot_dropin" 'the administrator receives a LUKS home image'
+require_fixed '--disk-size=1G' "$homed_firstboot_dropin" 'the administrator home cannot consume container state'
+require_fixed '--auto-resize-mode=off' "$homed_firstboot_dropin" 'the administrator home cannot grow automatically'
+require_fixed '--nosuid=yes --nodev=yes --noexec=yes' "$homed_firstboot_dropin" 'the administrator home has restrictive mount flags'
+require_fixed 'DefaultStorage=luks' mkosi.extra/usr/lib/systemd/homed.conf.d/40-particleos.conf 'homed defaults to LUKS storage'
+require_fixed 'DefaultFileSystemType=btrfs' mkosi.extra/usr/lib/systemd/homed.conf.d/40-particleos.conf 'homed defaults to Btrfs'
+require_fixed 'SYSTEMD_HOME_MOUNT_OPTIONS_BTRFS=compress=zstd:1,noacl,user_subvol_rm_allowed,rootcontext=system_u:object_r:user_home_dir_t:s0' mkosi.extra/usr/lib/systemd/system/systemd-homed.service.d/40-particleos-selinux.conf 'homed labels the mount before PAM enters it'
+require_fixed 'sysinit.target.wants/systemd-firstboot.service' mkosi.finalize 'root and timezone checks remain reachable after interruption'
+require_fixed 'multi-user.target.wants/systemd-homed.service' mkosi.finalize 'homed activation is immutable across A/B updates'
+require_fixed 'systemd-homed.service.wants/systemd-homed-firstboot.service' mkosi.finalize 'homed provisioning is immutable across A/B updates'
+require_fixed '.systemd_homework_t .container_runtime_t .gvisor_t' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'only homed and container helpers receive user-namespace creation'
+require_fixed '(allow .systemd_homed_t .systemd_homework_t (process2 (nosuid_transition)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'homed enters its confined worker from nosuid verified /usr'
+require_fixed '(allow .policykit_auth_t .systemd_homed_t (dbus (send_msg)))' mkosi.extra/usr/lib/particleos/selinux/particleos-containerhost.cil 'run0 PAM authentication can talk to homed'
+run0_policy=mkosi.extra/usr/share/polkit-1/rules.d/10-particleos-run0.rules
+require_fixed 'org.freedesktop.systemd1.manage-units' "$run0_policy" 'run0 systemd authority is explicitly governed'
+require_fixed 'subject.isInGroup("wheel")' "$run0_policy" 'run0 is limited to the provisioned administrator group'
+require_fixed 'polkit.Result.AUTH_SELF' "$run0_policy" 'run0 requires the administrator own password'
+require_fixed 'polkit.Result.NO' "$run0_policy" 'run0 denies non-administrators'
+require_fixed '/usr/share/polkit-1/rules.d/empower.rules' mkosi.conf 'upstream passwordless empowerment policy is removed'
+require_fixed 'run0 refuses the wheel administrator without authentication' tests/vm-audit.sh 'VM audit tests run0 authentication is mandatory'
+require_fixed 'run0 denies a non-wheel account before any root-password fallback' tests/vm-audit.sh 'VM audit tests the run0 non-administrator denial'
+require_fixed 'run0 authenticates the homed wheel user and executes as root' tests/vm-audit.sh 'VM audit tests successful run0 elevation'
+require_fixed 'homed and run0 completed without SELinux denials' tests/vm-audit.sh 'VM audit checks homed/run0 SELinux behavior'
+require_fixed 'homed-firstboot-audit' tests/run-vm-audit.sh 'VM audit provisions a disposable homed administrator without weakening production firstboot'
 if rg -Fq 'systemd-tpm2-setup.service' mkosi.finalize; then
     fail 'systemd-tpm2-setup.service remains available for the machine-local PCR policy'
 else

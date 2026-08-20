@@ -10,8 +10,6 @@ for unit in \
     proc-sys-fs-binfmt_misc.automount \
     proc-sys-fs-binfmt_misc.mount \
     authselect-apply-changes.service \
-    systemd-homed.service \
-    systemd-homed-firstboot.service \
     systemd-tpm2-setup-early.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
@@ -21,6 +19,21 @@ for unit in \
     sshd-keygen.target; do
     ln --symbolic --force /dev/null "$BUILDROOT/usr/lib/systemd/system/$unit"
 done
+
+# Keep the native provisioning checks reachable from immutable /usr. Their
+# tools are idempotent and return immediately after root/timezone and one homed
+# account exist, while an interrupted first boot resumes instead of being
+# stranded by ConditionFirstBoot on the next boot.
+mkdir -p \
+    "$BUILDROOT/usr/lib/systemd/system/sysinit.target.wants" \
+    "$BUILDROOT/usr/lib/systemd/system/multi-user.target.wants" \
+    "$BUILDROOT/usr/lib/systemd/system/systemd-homed.service.wants"
+ln -sfn ../systemd-firstboot.service \
+    "$BUILDROOT/usr/lib/systemd/system/sysinit.target.wants/systemd-firstboot.service"
+ln -sfn ../systemd-homed.service \
+    "$BUILDROOT/usr/lib/systemd/system/multi-user.target.wants/systemd-homed.service"
+ln -sfn ../systemd-homed-firstboot.service \
+    "$BUILDROOT/usr/lib/systemd/system/systemd-homed.service.wants/systemd-homed-firstboot.service"
 
 for user_unit in \
     podman.service \

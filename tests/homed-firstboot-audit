@@ -1,0 +1,27 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+readonly username=particleadmin
+readonly password='ParticleOS-Test-Run0-261!'
+
+if homectl inspect "$username" >/dev/null 2>&1; then
+    exit 0
+fi
+
+# Noninteractive credentials are confined to the disposable VM audit. Mirror
+# every security-relevant property of the production native firstboot command.
+NEWPASSWORD="$password" homectl create "$username" \
+    --member-of=wheel,systemd-journal \
+    --storage=luks \
+    --fs-type=btrfs \
+    --disk-size=1G \
+    --auto-resize-mode=off \
+    --luks-discard=yes \
+    --nosuid=yes \
+    --nodev=yes \
+    --noexec=yes \
+    --enforce-password-policy=yes
+
+homectl inspect "$username" >/dev/null
+[[ -f /home/$username.home ]]

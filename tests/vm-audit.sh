@@ -188,8 +188,6 @@ else
 fi
 for unit in \
     authselect-apply-changes.service \
-    systemd-homed.service \
-    systemd-homed-firstboot.service \
     systemd-tpm2-setup-early.service \
     systemd-pcrlogin@.service \
     systemd-pcrnvdone.service \
@@ -202,6 +200,111 @@ for unit in \
         fail "$unit is masked"
     fi
 done
+if systemctl is-active --quiet systemd-homed.service &&
+        [[ $(systemctl is-enabled systemd-homed.service 2>/dev/null) == enabled ]] &&
+        [[ $(systemctl is-enabled systemd-homed-firstboot.service 2>/dev/null) == enabled ]]; then
+    pass 'systemd-homed and its resumable native firstboot wizard are enabled'
+else
+    systemctl status --no-pager systemd-homed.service systemd-homed-firstboot.service 2>/dev/null || true
+    fail 'systemd-homed and its resumable native firstboot wizard are enabled'
+fi
+
+admin=particleadmin
+admin_password='ParticleOS-Test-Run0-261!'
+admin_groups=" $(id --name --groups "$admin" 2>/dev/null || true) "
+if homectl inspect "$admin" >/dev/null 2>&1 &&
+        [[ -f /home/$admin.home ]] &&
+        [[ $admin_groups == *' wheel '* ]] &&
+        [[ $admin_groups == *' systemd-journal '* ]]; then
+    pass 'first boot created one LUKS-backed homed run0 administrator'
+else
+    homectl inspect "$admin" 2>&1 || true
+    fail 'first boot created one LUKS-backed homed run0 administrator'
+fi
+if [[ $(readlink -f /etc/localtime 2>/dev/null) == /usr/share/zoneinfo/Etc/UTC ]] &&
+        ! grep -q '^root:!unprovisioned:' /etc/shadow; then
+    pass 'first boot completed the recovery root password and timezone stages'
+else
+    fail 'first boot completed the recovery root password and timezone stages'
+fi
+if grep -qF 'pam_systemd_home.so' /usr/lib/pam.d/system-auth &&
+        grep -qF 'pam_systemd_home.so' /usr/lib/pam.d/password-auth &&
+        [[ ! -e /usr/share/polkit-1/rules.d/empower.rules ]]; then
+    pass 'PAM activates homed accounts and persistent run0 empowerment is absent'
+else
+    fail 'PAM activates homed accounts and persistent run0 empowerment is absent'
+fi
+
+run0_noauth_log=/run/particleos-run0-noauth.log
+run0_nonwheel_log=/run/particleos-run0-nonwheel.log
+run0_wrong_log=/run/particleos-run0-wrong.log
+run0_good_log=/run/particleos-run0-good.log
+if ! runuser --user "$admin" -- run0 --no-ask-password --pipe /usr/bin/id -u \
+        >"$run0_noauth_log" 2>&1; then
+    pass 'run0 refuses the wheel administrator without authentication'
+else
+    cat "$run0_noauth_log"
+    fail 'run0 refuses the wheel administrator without authentication'
+fi
+if ! runuser --user nobody -- run0 --no-ask-password --pipe /usr/bin/id -u \
+        >"$run0_nonwheel_log" 2>&1; then
+    pass 'run0 denies a non-wheel account before any root-password fallback'
+else
+    cat "$run0_nonwheel_log"
+    fail 'run0 denies a non-wheel account before any root-password fallback'
+fi
+if ! printf '%s\n' 'ParticleOS-Test-Wrong-Password!' |
+        runuser --user "$admin" -- script --quiet --return --echo=never \
+            --command 'run0 --pipe /usr/bin/id -u' /dev/null \
+            >"$run0_wrong_log" 2>&1; then
+    pass 'run0 rejects an incorrect homed administrator password'
+else
+    cat "$run0_wrong_log"
+    fail 'run0 rejects an incorrect homed administrator password'
+fi
+runuser --user "$admin" -- run0 -K >/dev/null 2>&1 || true
+if printf '%s\n' "$admin_password" |
+        runuser --user "$admin" -- script --quiet --return --echo=never \
+            --command 'run0 --pipe /usr/bin/id -u' /dev/null \
+            >"$run0_good_log" 2>&1 &&
+        tr -d '\r' <"$run0_good_log" | grep -qx '0'; then
+    pass 'run0 authenticates the homed wheel user and executes as root'
+else
+    cat "$run0_good_log"
+    journalctl --boot --no-pager -u polkit-agent-helper@\*.service 2>/dev/null | tail -80 || true
+    fail 'run0 authenticates the homed wheel user and executes as root'
+fi
+
+if PASSWORD="$admin_password" homectl activate "$admin" >/dev/null 2>&1; then
+    home_options=$(findmnt -n -o OPTIONS --target "/home/$admin" 2>/dev/null || true)
+    home_context=$(stat -c '%C' "/home/$admin" 2>/dev/null || true)
+    if [[ ,$home_options, == *,nosuid,* && ,$home_options, == *,nodev,* &&
+            ,$home_options, == *,noexec,* &&
+            $home_context == system_u:object_r:user_home_dir_t:s0 ]]; then
+        pass 'the administrator home mounts nosuid,nodev,noexec with its SELinux label'
+    else
+        printf 'home options=%q context=%q\n' "$home_options" "$home_context"
+        fail 'the administrator home mounts nosuid,nodev,noexec with its SELinux label'
+    fi
+    homectl deactivate "$admin" >/dev/null 2>&1 || true
+else
+    fail 'the administrator home mounts nosuid,nodev,noexec with its SELinux label'
+fi
+homed_avc=$(ausearch -m AVC -ts boot 2>/dev/null |
+    grep -Ei 'homed|homework|policykit|run0' || true)
+if [[ -z $homed_avc ]]; then
+    pass 'homed and run0 completed without SELinux denials'
+else
+    printf '%s\n' "$homed_avc"
+    fail 'homed and run0 completed without SELinux denials'
+fi
+if ausearch -m USER_AUTH,USER_ACCT -ts boot 2>/dev/null |
+        grep -q 'acct="particleadmin"'; then
+    pass 'run0 authentication is recorded in the kernel audit trail'
+else
+    ausearch -m USER_AUTH,USER_ACCT -ts boot 2>/dev/null | tail -80 || true
+    fail 'run0 authentication is recorded in the kernel audit trail'
+fi
 if [[ $(systemctl is-enabled systemd-tpm2-setup.service 2>/dev/null) != masked ]]; then
     pass 'systemd-tpm2-setup.service is available for the machine-local PCR policy'
 else
