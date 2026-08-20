@@ -16,6 +16,7 @@ gate_fail() {
 if [[ -x $repository/scripts/validate.sh ]]; then
     "$repository/scripts/validate.sh"
 elif [[ -f $gate && -f $signing_wrapper && -f $archive_helper ]]; then
+    echo "Verifying first-pass security-gate attestation"
     validation_count=$(grep -c '^validation=passed$' "$gate" || true)
     [[ $validation_count == 1 ]] || gate_fail "expected exactly one validation=passed assertion"
     wrapper_digest=$(sed -n 's/^obs_build_sha256=//p' "$gate")
@@ -26,6 +27,7 @@ elif [[ -f $gate && -f $signing_wrapper && -f $archive_helper ]]; then
     actual_archive_digest=$(sha256sum -- "$archive_helper" | awk '{print $1}')
     [[ $actual_wrapper_digest == "$wrapper_digest" ]] || gate_fail "OBS build wrapper digest mismatch"
     [[ $actual_archive_digest == "$archive_digest" ]] || gate_fail "repart archive validator digest mismatch"
+    echo "First-pass security-gate attestation verified"
 else
     echo "Repository security validation or its signing-pass attestation is unavailable" >&2
     exit 1
@@ -35,7 +37,7 @@ resource_dir="$(/usr/bin/python3 -c '
 from pathlib import Path
 import mkosi.resources
 print(Path(mkosi.resources.__file__).parent / "mkosi-obs")
-')"
+')" || gate_fail "cannot locate the upstream mkosi OBS resources"
 upstream_helper="$resource_dir/mkosi.build"
 output=/work/src/usr/src/packages/OTHER
 
@@ -66,7 +68,8 @@ roothashes=("$sources"/ParticleOS-Host_*.roothash)
 prefix="${roothashes[0]%.roothash}"
 os_release="$prefix.osrelease"
 repart_archive="$prefix.repart.tar"
-[[ -f "$os_release" && -f "$repart_archive" ]]
+[[ -f $os_release ]] || gate_fail "missing os-release metadata for the signed root hash"
+[[ -f $repart_archive ]] || gate_fail "missing repart archive for the signed root hash"
 
 read_release_field() {
     local key=$1 value
@@ -77,8 +80,8 @@ read_release_field() {
     printf '%s' "$value"
 }
 
-image_id="$(read_release_field IMAGE_ID)"
-image_version="$(read_release_field IMAGE_VERSION)"
+image_id="$(read_release_field IMAGE_ID)" || gate_fail "invalid IMAGE_ID in release metadata"
+image_version="$(read_release_field IMAGE_VERSION)" || gate_fail "invalid IMAGE_VERSION in release metadata"
 label="${image_id}_${image_version}_vsig"
 [[ ${#label} -le 36 ]] || {
     echo "GPT label exceeds 36 characters: $label" >&2
@@ -99,7 +102,7 @@ mapfile -t signature_definitions < <(
     exit 1
 }
 sed -i "s/^Label=.*/Label=$label/" "${signature_definitions[0]}"
-grep -qxF "Label=$label" "${signature_definitions[0]}"
+grep -qxF "Label=$label" "${signature_definitions[0]}" || gate_fail "cannot set the signed verity partition label"
 
 staged_archive="$staged/${repart_archive##*/}"
 rm -- "$staged_archive"
