@@ -223,11 +223,9 @@ require_fixed 'Requires=particleos-module-preload.service' mkosi.extra/usr/lib/s
 require_fixed 'Requires=nftables.service particleos-module-preload.service' mkosi.extra/usr/lib/systemd/system/particleos-module-lockdown.service 'irreversible lockdown requires both firewall and fixed modules'
 reject_fixed '/usr/lib/modules-load.d/particleos.conf' mkosi.extra/usr/lib/particleos/load-modules 'container-only modules are not loaded in the boot-critical generic sysinit loader'
 reject_fixed 'nft delete table inet particleos_filter' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall startup has no expected deletion error'
-# Literal implementation strings, not expressions for this validator.
-# shellcheck disable=SC2016
-require_fixed '"$root_skeleton/boot"' mkosi.finalize 'the factory root provides a boot mountpoint for GPT auto-discovery'
-# shellcheck disable=SC2016
-require_fixed '"$root_skeleton/efi"' mkosi.finalize 'the factory root provides the preferred ESP mountpoint'
+require_fixed 'MakeDirectories=/boot /efi' mkosi.extra/usr/lib/repart.d/40-root.conf 'the formatted root provides both boot-manager mountpoints'
+reject_fixed 'root_skeleton/boot' mkosi.finalize 'the finalizer does not rely on copied empty mountpoints'
+reject_fixed 'root_skeleton/efi' mkosi.finalize 'the preferred ESP path is created explicitly by repart'
 require_fixed 'LoadCredential=vm-audit' tests/vm-audit-getty.conf 'VM audit is injected without modifying the image'
 require_fixed 'SuccessAction=poweroff' tests/vm-audit-getty.conf 'successful VM audits power off the guest'
 require_fixed 'FailureAction=poweroff' tests/vm-audit-getty.conf 'failed VM audits power off the guest'
@@ -266,7 +264,8 @@ require_fixed 'bootctl --print-boot-path' tests/vm-audit.sh 'VM audit asks the b
 require_fixed 'mountpoint -q "$boot_path"' tests/vm-audit.sh 'VM audit proves the ESP is mounted rather than a plain directory'
 require_fixed 'systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit' tests/run-vm-audit.sh 'VM runner replaces the generated primary console command with the audit'
 require_fixed 'systemd.unit-dropin.preset-global.service~90-particleos-audit' tests/run-vm-audit.sh 'first-boot preset completion explicitly starts the injected audit unit'
-require_fixed 'start --no-block getty@tty1.service' tests/audit-activate.conf 'test activation starts after first-boot presets without blocking sysinit'
+require_fixed 'LoadCredential=audit-activate' tests/audit-activate.conf 'test activation uses a credential-backed immutable helper'
+require_fixed 'systemctl --no-block start getty@tty1.service' tests/audit-activate 'test activation starts after first-boot presets without blocking sysinit'
 require_fixed 'systemd.mask=serial-getty@ttyS0.service' tests/run-vm-audit.sh 'VM runner reserves the serial console for complete audit output'
 # shellcheck disable=SC2016
 require_fixed 'readonly=on,file=$container_fixture' tests/run-vm-audit.sh 'VM runner attaches the signed-container fixture read-only'

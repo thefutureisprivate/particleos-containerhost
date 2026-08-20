@@ -97,6 +97,7 @@ latest_version=$(printf '%s\n%s\n' "$base_version" "$candidate_version" | sort -
 audit_service=$(base64 -w0 "$repository/tests/update-rollback-audit-getty.conf")
 audit_script=$(base64 -w0 "$repository/tests/update-rollback-audit.sh")
 audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
+audit_activate_script=$(base64 -w0 "$repository/tests/audit-activate")
 health_service=$(base64 -w0 "$repository/tests/update-rollback-health.service")
 health_script=$(base64 -w0 "$repository/tests/update-rollback-health.sh")
 base_credential=$(printf '%s\n' "$base_version" | base64 -w0)
@@ -232,6 +233,7 @@ run_guest() {
         -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-update-audit=$audit_service" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.preset-global.service~90-particleos-audit=$audit_activate" \
+        -smbios "type=11,value=io.systemd.credential.binary:audit-activate=$audit_activate_script" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.particleos-workload-health.service=$health_service" \
         -smbios "type=11,value=io.systemd.credential.binary:update-rollback-audit=$audit_script" \
         -smbios "type=11,value=io.systemd.credential.binary:update-rollback-health=$health_script" \

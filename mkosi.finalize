@@ -88,9 +88,6 @@ cp --archive --no-target-directory --update=none \
 ln -sr "$BUILDROOT/usr" "$BUILDROOT/usr/share/factory/usr"
 
 root_skeleton="$BUILDROOT/usr/share/factory/root"
-install -d -m 0500 \
-    "$root_skeleton/boot" \
-    "$root_skeleton/efi"
 install -d -m 0755 \
     "$root_skeleton/etc" \
     "$root_skeleton/home" \

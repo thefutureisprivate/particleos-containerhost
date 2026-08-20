@@ -265,8 +265,9 @@ host-only blessing.
 The disk contains an ESP, two `/usr` + verity + verity-signature slot triples,
 and one encrypted mutable-state partition. systemd-sysupdate writes the
 inactive UKI and operating-system slot as one deployment. The factory root
-provides `/efi` and `/boot`; systemd's GPT discovery mounts the ESP at `/efi`,
-which is the single boot-manager path used for UKI admission and updates.
+partition definition creates `/efi` and `/boot` before mounting; systemd's GPT
+discovery mounts the ESP at `/efi`, which is the single boot-manager path used
+for UKI admission and updates.
 
 systemd-repart initially creates the LUKS2 state token against PCR 7 so the
 first boot can create the machine-local policy. The enrollment service predicts
