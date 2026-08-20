@@ -93,7 +93,7 @@ require_fixed 'ConditionPathExists=/sys/firmware/efi/efivars/LoaderBootCountPath
 require_fixed 'RequiredBy=systemd-bless-boot.service' mkosi.extra/usr/lib/systemd/system/particleos-workload-health.service 'opt-in creates a direct blessing requirement'
 require_fixed 'Before=systemd-bless-boot.service' mkosi.extra/usr/lib/systemd/system/particleos-workload-health.service 'blessing waits for an enabled health gate'
 require_fixed 'ExecStart=/usr/lib/particleos/workload-health-gate /usr/lib/particleos/check-workload-health' mkosi.extra/usr/lib/systemd/system/particleos-workload-health.service 'the production health probe rejects a failing candidate before returning'
-require_fixed '/usr/bin/systemd-bless-boot bad' mkosi.extra/usr/lib/particleos/workload-health-gate 'an unhealthy counted candidate is explicitly made ineligible'
+require_fixed '/usr/lib/systemd/systemd-bless-boot bad' mkosi.extra/usr/lib/particleos/workload-health-gate 'an unhealthy counted candidate is explicitly made ineligible'
 require_fixed 'ipe-policy-containerhost' mkosi.conf 'the systrap-compatible signed IPE policy is selected'
 require_fixed 'ipe-policy-containerhost' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS stages the systrap-compatible IPE policy'
 if grep -qxF '        ipe-policy' mkosi.conf; then
