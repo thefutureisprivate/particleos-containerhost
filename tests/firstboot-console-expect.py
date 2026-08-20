@@ -21,10 +21,17 @@ PROMPTS = (
     (b"Password:", b"ParticleOS-Test-Run0-261!\n"),
     (
         b"PARTICLEOS_ADMIN_SHELL_READY",
-        b"run0 --no-ask-password --pipe /usr/bin/true && "
-        b"echo PARTICLEOS_FIRSTBOOT_CONSOLE_FAIL run0-accepted-without-auth || "
+        b"run0 --no-ask-password --pipe /usr/bin/true && exit 97 || "
         b"echo PARTICLEOS_RUN0_NOAUTH_DENIED; "
-        b"run0 --pipe /usr/bin/bash /run/particleos-firstboot-run0-audit; exit\n",
+        b"run0 --pipe /usr/bin/bash /run/particleos-firstboot-run0-audit || { "
+        b"echo PARTICLEOS_RUN0_AUTH_FAILED; "
+        b"systemctl --no-pager --full status polkit.service systemd-homed.service "
+        b"systemd-logind.service; "
+        b"journalctl --boot --no-pager --output=short-monotonic "
+        b"-u polkit.service -u systemd-homed.service -u systemd-logind.service; "
+        b"journalctl --boot --no-pager --output=cat _TRANSPORT=audit | "
+        b"grep -Ei '(avc:.*denied|polkit-agent-helper|unit=run-p|acct=.?particleadmin)'; "
+        b"}; exit\n",
     ),
     (b"Password:", b"ParticleOS-Test-Run0-261!\n"),
 )
@@ -82,6 +89,11 @@ def main() -> int:
                         prompt, answer = PROMPTS[prompt_index]
                         if prompt in pending:
                             if answer is not None:
+                                # The run0 Polkit agent prints its prompt just
+                                # before it switches the serial tty to no-echo
+                                # input. Avoid racing that terminal hand-off.
+                                if prompt_index == len(PROMPTS) - 1:
+                                    time.sleep(0.5)
                                 process.stdin.write(answer)
                                 process.stdin.flush()
                             prompt_index += 1
@@ -110,6 +122,9 @@ def main() -> int:
         return 1
     if b"PARTICLEOS_RUN0_NOAUTH_DENIED" not in transcript:
         print("run0 did not report its unauthenticated denial", file=sys.stderr)
+        return 1
+    if b"==== AUTHENTICATION COMPLETE ====" not in transcript:
+        print("run0 did not complete its interactive authentication", file=sys.stderr)
         return 1
     if b"PARTICLEOS_FIRSTBOOT_CONSOLE_PASS " not in transcript:
         print("first-boot guest audit did not report success", file=sys.stderr)

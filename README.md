@@ -1,10 +1,12 @@
 # ParticleOS Container Host
 
-A minimal and hardened Fedora VM/VPS container host built on
-[`systemd/particleos`](https://github.com/systemd/particleos).
+> A minimal Fedora VM/VPS image for running one signed OCI workload through
+> Podman and gVisor, built on
+> [`systemd/particleos`](https://github.com/systemd/particleos).
 
-Requires x86-64 UEFI Secure Boot, TPM 2.0, and a disk of at least 16 GiB.
-Deploy one image instance per workload security boundary.
+ParticleOS Container Host requires x86-64 UEFI Secure Boot, TPM 2.0, and a
+disk of at least 16 GiB. One VM or VPS is one workload security boundary:
+deploy a separate instance for every workload.
 
 ## Table of Contents
 
@@ -27,10 +29,10 @@ Deploy one image instance per workload security boundary.
 ## Purpose
 
 ParticleOS Container Host turns the upstream ParticleOS image model into one
-small, workload-independent VM or VPS appliance for running one OCI workload
-through gVisor. The host authenticates its immutable operating-system content,
-encrypts mutable state against the local TPM, and reduces the host-kernel
-interface exposed to a compromised workload.
+small, workload-independent VM or VPS appliance for running a signed OCI
+workload through gVisor. The host authenticates its immutable operating-system
+content, encrypts mutable state against the local TPM, and reduces the
+host-kernel interface exposed to a compromised workload.
 
 The image deliberately has one operational model: administrators provision
 trusted OCI identities and root-owned Quadlets, Podman starts them through
@@ -39,9 +41,9 @@ Use a separate VM/VPS for each workload rather than treating Podman bridges as
 tenant boundaries. Host updates, workload trust, network authority, and
 rollback authorization all fail closed.
 
-The goal is not to make ParticleOS a container orchestration platform. The
-goal is to keep the host boundary small and understandable while preserving
-ParticleOS's image-based boot, update, and recovery model.
+The design keeps the host boundary small and understandable while preserving
+ParticleOS's image-based boot, update, and recovery model. It is an appliance,
+not a multi-tenant container cluster.
 
 ## ParticleOS Baseline
 
@@ -397,25 +399,45 @@ certificate from the UKI, requires certificate fingerprint
 `F18D066F4D25D63875BB0C370061D75A2AED67E81D33AF11669D79860BB9D2B7`,
 and cryptographically verifies the PE signature with `sbverify --cert`.
 
-Write the validated raw image to the whole disk of a dedicated VM or VPS. Use
-one VM/VPS per workload. Boot with UEFI Secure Boot in setup mode so
-systemd-boot can enroll the OBS project certificate, then leave setup mode and
-verify Secure Boot before provisioning the workload.
+Write the validated raw image to the whole disk of a dedicated VM or VPS. Do
+not share one instance between unrelated workloads. Boot with UEFI Secure Boot
+in setup mode so systemd-boot can enroll the OBS project certificate, then
+leave setup mode and verify Secure Boot.
 
-First boot is headless and performs repartitioning plus the first enrollment
-phase; it reboots once so the new PCR 7+11 token can be proved before bootstrap
-retirement. Through a trusted local path, create a named administrator, install
-an Ed25519 authorized key, create the host key, and enable SSH socket activation:
+Keep the provider or hypervisor console open for initial setup. The native
+systemd first-boot flow asks, in order:
+
+1. a recovery root password;
+2. the system timezone;
+3. an administrator username; and
+4. that administrator's password.
+
+After the timezone is written, the machine automatically reboots once to stage
+and prove its PCR 7+11 state-unlock policy. The username and password prompts
+continue after that enrollment reboot. The administrator is stored by
+systemd-homed in a 1 GiB password-encrypted LUKS/Btrfs image mounted
+`nosuid,nodev,noexec` and is added to `wheel` and `systemd-journal`.
+
+Log in as the named administrator. Use `run0` for privileged work; Polkit
+requires the administrator's own password for every elevation. The root
+password is for console recovery, not routine administration.
+
+SSH remains disabled after provisioning and never accepts root or password
+login. To enable key-only access, place an Ed25519 public key in the active
+administrator home, import it into the homed identity, generate the host key,
+and enable socket activation:
 
 ```console
-systemctl enable --now sshd-keygen@ed25519.service
-systemctl enable --now sshd.socket
+run0 homectl update "$USER" --ssh-authorized-keys=@"$HOME/id_ed25519.pub"
+run0 systemctl enable --now sshd-keygen@ed25519.service
+run0 systemctl enable --now sshd.socket
 ```
 
 Install OCI verification keys and a narrow image policy, add root-owned
-Quadlets with health checks, and provision the workload's exact nftables
-tuples. Recovery credentials and their escrow remain part of the operator's
-separately authenticated recovery process.
+Quadlets, and provision the workload's exact nftables tuples. Opt into workload
+health gating only after its `HealthCmd=` and `Notify=healthy` behavior has been
+validated on the currently blessed release. Recovery credentials and their
+escrow remain part of the operator's separately authenticated recovery process.
 
 ## Updates
 
@@ -487,6 +509,23 @@ PK, KEK and db databases:
   /path/to/enrolled-ovmf-vars.bin
 ```
 
+Exercise the native console flow, including the real rollback-policy reboot,
+root password, timezone, homed account creation, PAM/logind login,
+unauthenticated `run0` denial, and password-authenticated elevation:
+
+```console
+./tests/run-firstboot-console-audit.sh \
+  /path/to/artifacts \
+  /path/to/enrolled-ovmf-vars.bin
+```
+
+This test opens a GTK VM display by default. Set `FIRSTBOOT_VM_DISPLAY=none`
+for headless automation. A successful run prints:
+
+```text
+PARTICLEOS_FIRSTBOOT_CONSOLE_PASS user=particleadmin timezone=Etc/UTC run0=authenticated
+```
+
 Then run the complete local VM audit:
 
 ```console
@@ -513,7 +552,7 @@ unlock and repeats the signed-container path. Every guest and TPM emulator
 stops after success or failure. A successful audit boot prints:
 
 ```text
-PARTICLEOS_VM_AUDIT_PASS checks=80
+PARTICLEOS_VM_AUDIT_PASS checks=93
 ```
 
 Set `VM_AUDIT_KEEP_FAILED=1` to retain a failed guest disk and serial logs for

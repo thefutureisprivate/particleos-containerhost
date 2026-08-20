@@ -73,11 +73,16 @@ avc=$(/usr/bin/grep -Ei 'avc:.*denied.*(homed|homework|fsadm|policykit|run0|logi
     fail 'homed, login, or run0 generated an SELinux denial'
 }
 authentication=$(/usr/bin/grep -Ei \
-    'acct="?particleadmin"?.*(polkit-agent-helper|polkit-1).*(res|result)=success|(polkit-agent-helper|polkit-1).*acct="?particleadmin"?.*(res|result)=success' \
+    'SERVICE_STOP.*unit=polkit-agent-helper@.*res=success' \
     <<<"$audit_records" || true)
-[[ -n $authentication ]] || {
-    printf '%s\n' "$audit_records"
-    fail 'run0 authentication is absent from the kernel audit trail'
+transient_start=$(/usr/bin/grep -Ei \
+    'SERVICE_START.*unit=run-p[0-9]+-i[0-9]+.*res=success' \
+    <<<"$audit_records" || true)
+[[ -n $authentication && -n $transient_start ]] || {
+    /usr/bin/grep -Ei \
+        '(polkit-agent-helper|unit=run-p[0-9]+-i[0-9]+|acct="?particleadmin"?)' \
+        <<<"$audit_records" || true
+    fail 'authenticated run0 is absent from the kernel audit trail'
 }
 printf 'PARTICLEOS_FIRSTBOOT_CONSOLE_PASS user=particleadmin timezone=Etc/UTC run0=authenticated\n'
 EOF
