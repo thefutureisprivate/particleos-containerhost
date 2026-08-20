@@ -36,11 +36,12 @@ else
 fi
 boot_path=$(bootctl --print-boot-path 2>/dev/null || true)
 boot_type=$(findmnt -n -o FSTYPE --target "$boot_path" 2>/dev/null || true)
-if [[ $boot_path == /efi ]] && mountpoint -q "$boot_path" &&
+if [[ $boot_path == /efi ]] && systemctl is-active --quiet efi.mount &&
+        mountpoint -q "$boot_path" &&
         [[ $boot_type == vfat ]]; then
-    pass 'the EFI system partition is mounted at the boot-manager path'
+    pass 'the mandatory EFI mount unit owns the boot-manager path'
 else
-    fail 'the EFI system partition is mounted at the boot-manager path'
+    fail 'the mandatory EFI mount unit owns the boot-manager path'
 fi
 check_grep 'kernel lockdown is in confidentiality mode' '\[confidentiality\]' /sys/kernel/security/lockdown
 check_grep 'IPE enforcement is requested by the signed UKI' '(^| )ipe\.enforce=1( |$)' /proc/cmdline

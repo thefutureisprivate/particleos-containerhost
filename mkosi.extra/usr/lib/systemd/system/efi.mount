@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+[Unit]
+Description=ParticleOS EFI System Partition
+Documentation=https://github.com/thefutureisprivate/particleos-containerhost#architecture
+
+[Mount]
+What=/dev/disk/by-partlabel/ParticleESP
+Where=/efi
+Type=vfat
+Options=umask=0077,nodev,nosuid,noexec
