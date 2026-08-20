@@ -307,13 +307,12 @@ run_guest health-fallback 0 enrollment
 run_guest health-fallback 1 clean
 grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 fallback_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
-for boot_number in 2 3 4; do
-    run_guest health-fallback "$boot_number" clean
-    grep 'UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT ' "$active_state/boot-$boot_number.log"
-    [[ $(extract_usrhash "$active_state/boot-$boot_number.log") != "$fallback_base_usrhash" ]]
-done
-run_guest health-fallback 5 clean
-grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-5.log"
-[[ $(extract_usrhash "$active_state/boot-5.log") == "$fallback_base_usrhash" ]]
+run_guest health-fallback 2 clean
+grep 'UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT ' "$active_state/boot-2.log"
+grep 'PARTICLEOS_WORKLOAD_CANDIDATE_REJECTED ' "$active_state/boot-2.log"
+[[ $(extract_usrhash "$active_state/boot-2.log") != "$fallback_base_usrhash" ]]
+run_guest health-fallback 3 clean
+grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-3.log"
+[[ $(extract_usrhash "$active_state/boot-3.log") == "$fallback_base_usrhash" ]]
 
 echo 'ParticleOS A/B update, health fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'

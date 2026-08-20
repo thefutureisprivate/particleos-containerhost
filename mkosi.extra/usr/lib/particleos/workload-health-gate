@@ -1,0 +1,26 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -uo pipefail
+
+if (($# == 0)); then
+    echo 'workload health gate requires a probe command' >&2
+    exit 2
+fi
+
+"$@"
+probe_status=$?
+if ((probe_status == 0)); then
+    exit 0
+fi
+
+# Do not rely on all remaining retry boots seeing LoaderBootCountPath. Mark
+# this counted candidate bad while the current boot still has the authoritative
+# EFI path, then let the unit's FailureAction reboot into the known-good slot.
+if ! /usr/bin/systemd-bless-boot bad; then
+    echo 'failed to mark the unhealthy counted candidate bad' >&2
+    exit "$probe_status"
+fi
+
+sync
+echo "PARTICLEOS_WORKLOAD_CANDIDATE_REJECTED status=$probe_status" >&2
+exit "$probe_status"

@@ -15,6 +15,9 @@ ls -la /dev/disk/by-partlabel 2>/dev/null || true
 printf '%s\n' '--- EFI mount job ---'
 systemctl --no-pager --full status efi.mount 2>&1 || true
 findmnt --target /efi 2>/dev/null || true
+printf '%s\n' '--- boot-count evidence ---'
+ls -la /sys/firmware/efi/efivars/LoaderBootCountPath-* 2>/dev/null || true
+find /efi/EFI/Linux -mindepth 1 -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | sort || true
 printf '%s\n' '--- remaining boot jobs ---'
 systemctl --no-pager --plain list-jobs 2>&1 || true
 printf 'PARTICLEOS_BOOT_AUDIT_DIAGNOSTIC_END\n'

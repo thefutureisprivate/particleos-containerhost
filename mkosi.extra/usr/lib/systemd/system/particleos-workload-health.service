@@ -9,7 +9,7 @@ FailureAction=reboot
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/lib/particleos/check-workload-health
+ExecStart=/usr/lib/particleos/workload-health-gate /usr/lib/particleos/check-workload-health
 
 [Install]
 RequiredBy=systemd-bless-boot.service

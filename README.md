@@ -255,10 +255,11 @@ systemctl enable particleos-workload-health.service
 
 The service becomes a direct requirement of `systemd-bless-boot.service` only
 after that opt-in and runs only when systemd-boot marks the selected deployment
-as counted. A failing candidate consumes its three attempts and falls back;
-the uncounted working slot skips the workload gate so one broken application
-cannot reboot both A/B deployments forever. Disable the service to return to
-host-only blessing.
+as counted. On a failed probe, the gate marks that candidate bad while its
+authoritative boot-count path is still available, then reboots directly into
+the uncounted working slot. The fallback skips the workload gate, so one broken
+application cannot reboot both A/B deployments forever. Disable the service to
+return to host-only blessing.
 
 ## Disk and Update Model
 
@@ -435,9 +436,9 @@ Every transfer uses `Verify=yes`. The update unit stays active until every
 transfer commits, then validates the exact candidate UKI and commits the
 two-UKI PCR policy before recording reboot readiness. The rebooted candidate
 must satisfy host health and, when the administrator has enabled it, Quadlet
-health before blessing. A health failure exhausts only the counted candidate;
-the uncounted fallback remains bootable. Blessing either slot prunes the other
-UKI from state-unlock authorization.
+health before blessing. A failed workload probe marks only that counted
+candidate bad before reboot; the uncounted fallback remains bootable. Blessing
+either slot prunes the other UKI from state-unlock authorization.
 
 ## Diagnostics and Tests
 

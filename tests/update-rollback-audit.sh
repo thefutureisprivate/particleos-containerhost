@@ -153,18 +153,31 @@ staged)
         [[ $scenario == health-fallback ]]
         [[ ${#component_files[@]} -eq 1 ]]
         [[ ${#installed_ukis[@]} -eq 2 ]]
+        mapfile -t rejected_candidates < <(
+            find "$uki_directory" -mindepth 1 -maxdepth 1 -type f \
+                -name "ParticleOS-Host_${candidate_version}_x86-64+0-*.efi" -print
+        )
+        [[ ${#rejected_candidates[@]} -eq 1 ]]
         [[ ! -e $ready ]]
         check_policy_pcrs
-        echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS base=$base_version candidate=$candidate_version variants=${#component_files[@]}"
+        echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS base=$base_version candidate=$candidate_version variants=${#component_files[@]} rejected=${rejected_candidates[0]##*/}"
         exit 0
     fi
 
-    [[ $scenario == rollback-denial ]]
     [[ $IMAGE_VERSION == "$candidate_version" ]]
     [[ ${#component_files[@]} -eq 1 ]]
     [[ ${#installed_ukis[@]} -eq 2 ]]
     [[ ! -e $ready ]]
     check_policy_pcrs
+
+    if [[ $scenario == health-fallback ]]; then
+        echo "UPDATE_ROLLBACK_AUDIT_HEALTH_PENDING version=$candidate_version"
+        sleep 30
+        echo 'UPDATE_ROLLBACK_AUDIT_HEALTH_REBOOT_FAILED'
+        exit 1
+    fi
+
+    [[ $scenario == rollback-denial ]]
     read -r base_entry <"$base_entry_file"
     [[ $base_entry == "ParticleOS-Host_${base_version}_x86-64.efi" ]]
     bootctl set-oneshot "$base_entry"
