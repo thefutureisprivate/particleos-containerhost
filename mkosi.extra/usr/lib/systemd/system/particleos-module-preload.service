@@ -1,0 +1,33 @@
+[Unit]
+Description=Load the fixed ParticleOS container-host kernel module set
+After=sysinit.target
+Before=nftables.service particleos-module-lockdown.service network-pre.target
+ConditionPathExists=/usr/lib/particleos/modules.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/particleos/load-modules
+CapabilityBoundingSet=CAP_SYS_MODULE
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+PrivateDevices=no
+PrivateIPC=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

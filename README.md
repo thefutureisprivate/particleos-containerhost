@@ -128,7 +128,8 @@ Readiness | systemd and Quadlet health gate | Container `HealthCmd=` result
   protection.
 - SELinux enforcing with a dedicated gVisor runtime domain.
 - Signed IPE policy, confidentiality lockdown, mandatory module signatures,
-  serialized coldplug, and irreversible post-boot module lockdown.
+  fixed post-sysinit module preload, and irreversible module lockdown before
+  networking starts.
 - Rootful Podman with release-pinned gVisor runsc and systrap as the default
   runtime.
 - Signed OCI admission with an exact default-deny policy.
@@ -177,7 +178,8 @@ than a post-install checklist.
   fail-closed initrd.
 - **Runtime hardening:** sysctls constrain BPF, performance events, io_uring,
   userfaultfd, kernel logs and pointers, core dumps, unsafe links and FIFOs,
-  ptrace, and user namespaces. Required modules load first; the host then sets
+  ptrace, and user namespaces. Container-host modules load after boot-critical
+  sysinit and before nftables or networking; the host then sets
   `kernel.modules_disabled=1`.
 - **Administrative container boundary:** Podman, runsc, and every gVisor
   sidecar are root-owned mode `0750`. Unprivileged user-namespace creation is

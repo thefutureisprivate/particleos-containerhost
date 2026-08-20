@@ -1,0 +1,12 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+module_list=/usr/lib/particleos/modules.conf
+[[ -f $module_list && ! -L $module_list ]]
+
+while read -r module extra; do
+    [[ -n ${module:-} && ${module:0:1} != '#' ]] || continue
+    [[ $module =~ ^[a-z0-9_]+$ && -z ${extra:-} ]]
+    /usr/sbin/modprobe -- "$module"
+done <"$module_list"

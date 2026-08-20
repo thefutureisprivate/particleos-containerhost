@@ -11,6 +11,7 @@ enable chronyd.service
 disable chrony-wait.service
 
 enable nftables.service
+enable particleos-module-preload.service
 enable particleos-module-lockdown.service
 
 # Remote access is opt-in after an administrator account and Ed25519 key exist.
