@@ -1,0 +1,73 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+readonly username=particleadmin
+readonly password='ParticleOS-Test-Run0-261!'
+
+fail() {
+    printf 'PARTICLEOS_FIRSTBOOT_CONSOLE_FAIL %s\n' "$*"
+    exit 1
+}
+
+homectl inspect "$username" >/dev/null 2>&1 || fail 'homed account is absent'
+[[ -f /home/$username.home ]] || fail 'LUKS home image is absent'
+groups=" $(id --name --groups "$username") "
+[[ $groups == *' wheel '* && $groups == *' systemd-journal '* ]] ||
+    fail 'administrator groups are incomplete'
+identity=$(homectl inspect --json=short "$username")
+identity=${identity//[[:space:]]/}
+[[ $identity == *'"storage":"luks"'* &&
+   $identity == *'"fileSystemType":"btrfs"'* &&
+   $identity == *'"diskSize":1073741824'* &&
+   $identity == *'"autoResizeMode":"off"'* &&
+   $identity == *'"mountNoSuid":true'* &&
+   $identity == *'"mountNoDevices":true'* &&
+   $identity == *'"mountNoExecute":true'* ]] ||
+    fail 'homed identity does not preserve the hardened production properties'
+
+[[ $(readlink -f /etc/localtime) == /usr/share/zoneinfo/Etc/UTC ]] ||
+    fail 'timezone was not configured'
+grep -q '^root:!unprovisioned:' /etc/shadow &&
+    fail 'root recovery password sentinel remains'
+
+run0_noauth_log=/run/particleos-firstboot-run0-noauth.log
+run0_good_log=/run/particleos-firstboot-run0-good.log
+if runuser --user "$username" -- run0 --no-ask-password --pipe /usr/bin/id -u \
+        >"$run0_noauth_log" 2>&1; then
+    fail 'run0 accepted an unauthenticated administrator'
+fi
+runuser --user "$username" -- run0 -K >/dev/null 2>&1 || true
+if ! printf '%s\n' "$password" |
+        runuser --user "$username" -- script --quiet --return --echo=never \
+            --command 'run0 --pipe /usr/bin/id -u' /dev/null \
+            >"$run0_good_log" 2>&1; then
+    cat "$run0_good_log"
+    fail 'run0 rejected the homed administrator password'
+fi
+tr -d '\r' <"$run0_good_log" | grep -qx '0' || {
+    cat "$run0_good_log"
+    fail 'run0 did not execute with uid 0'
+}
+
+PASSWORD="$password" homectl activate "$username" >/dev/null 2>&1 ||
+    fail 'homed account activation failed'
+home_options=$(findmnt -n -o OPTIONS --target "/home/$username")
+home_context=$(stat -c '%C' "/home/$username")
+[[ ,$home_options, == *,nosuid,* &&
+   ,$home_options, == *,nodev,* &&
+   ,$home_options, == *,noexec,* ]] ||
+    fail 'home mount flags are not restrictive'
+[[ $home_context == system_u:object_r:user_home_dir_t:s0 ]] ||
+    fail 'home root has the wrong SELinux label'
+homectl deactivate "$username" >/dev/null 2>&1 || true
+
+homed_avc=$(ausearch -m AVC -ts boot 2>/dev/null |
+    grep -Ei 'homed|homework|fsadm|policykit|run0' || true)
+[[ -z $homed_avc ]] || {
+    printf '%s\n' "$homed_avc"
+    fail 'homed or run0 generated an SELinux denial'
+}
+
+printf 'PARTICLEOS_FIRSTBOOT_CONSOLE_PASS user=%s timezone=Etc/UTC run0=authenticated\n' \
+    "$username"
