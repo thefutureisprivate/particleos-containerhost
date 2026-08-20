@@ -55,7 +55,9 @@ qemu_active=0
 
 stop_tpm() {
     local command_line='' pid=''
-    [[ -s $swtpm_pid_file ]] && read -r pid <"$swtpm_pid_file" || true
+    if [[ -s $swtpm_pid_file ]]; then
+        read -r pid <"$swtpm_pid_file" || true
+    fi
     if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/comm && -r /proc/$pid/cmdline ]]; then
         command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline")
     fi
@@ -65,8 +67,9 @@ stop_tpm() {
             [[ ! -e /proc/$pid ]] && break
             sleep 0.1
         done
-        [[ -r /proc/$pid/comm && $(<"/proc/$pid/comm") == swtpm ]] &&
+        if [[ -r /proc/$pid/comm && $(<"/proc/$pid/comm") == swtpm ]]; then
             kill -KILL "$pid" 2>/dev/null || true
+        fi
     fi
 }
 

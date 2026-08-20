@@ -5,6 +5,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 failures=0
 
+for command in find grep python3 rg sed shellcheck; do
+    command -v "$command" >/dev/null || {
+        printf 'missing required validation command: %s\n' "$command" >&2
+        exit 2
+    }
+done
+
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf 'not ok - %s\n' "$1" >&2; failures=$((failures + 1)); }
 
@@ -496,11 +503,9 @@ for forbidden in nginx postgresql stalwart unbound mariadb redis; do
     fi
 done
 
-if command -v shellcheck >/dev/null; then
-    mapfile -t shell_files < <(find . -type f \( -name '*.sh' -o -name 'mkosi.*' -o -path './mkosi.scripts/*' \) \
-        -not -path './.git/*' -exec awk 'FNR == 1 && /^#!.*(ba)?sh/ {print FILENAME}' {} \;)
-    shellcheck "${shell_files[@]}" && pass 'shell scripts pass shellcheck' || failures=$((failures + 1))
-fi
+mapfile -t shell_files < <(find . -type f \( -name '*.sh' -o -name 'mkosi.*' -o -path './mkosi.scripts/*' \) \
+    -not -path './.git/*' -exec awk 'FNR == 1 && /^#!.*(ba)?sh/ {print FILENAME}' {} \;)
+shellcheck "${shell_files[@]}" && pass 'shell scripts pass shellcheck' || failures=$((failures + 1))
 
 if ((failures > 0)); then
     printf '%d validation check(s) failed\n' "$failures" >&2
