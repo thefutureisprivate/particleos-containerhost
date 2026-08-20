@@ -226,7 +226,8 @@ reject_fixed 'nft delete table inet particleos_filter' mkosi.extra/usr/lib/syste
 require_fixed 'MakeDirectories=/boot /efi' mkosi.extra/usr/lib/repart.d/40-root.conf 'the formatted root provides both boot-manager mountpoints'
 reject_fixed 'root_skeleton/boot' mkosi.finalize 'the finalizer does not rely on copied empty mountpoints'
 reject_fixed 'root_skeleton/efi' mkosi.finalize 'the finalizer does not rely on a copied empty ESP mountpoint'
-require_fixed 'Label=ParticleESP' mkosi.extra/usr/lib/repart.d/00-esp.conf 'the ESP has a stable GPT partition label'
+require_fixed 'Label=ParticleESP' mkosi.repart/00-esp.conf 'the published disk ESP has a stable GPT partition label'
+require_fixed 'Label=ParticleESP' mkosi.extra/usr/lib/repart.d/00-esp.conf 'runtime repart preserves the stable ESP GPT partition label'
 require_fixed 'What=/dev/disk/by-partlabel/ParticleESP' mkosi.extra/usr/lib/systemd/system/efi.mount 'the ESP mount resolves only the labeled ESP partition'
 require_fixed 'Where=/efi' mkosi.extra/usr/lib/systemd/system/efi.mount 'the ESP has one explicit boot-manager path'
 require_fixed 'Options=umask=0077,nodev,nosuid,noexec' mkosi.extra/usr/lib/systemd/system/efi.mount 'the writable ESP is root-only and non-executable after boot'
@@ -329,6 +330,7 @@ require_fixed 'gpgv --keyring' scripts/validate-artifacts.sh 'artifact validatio
 require_fixed 'sbverify --cert' scripts/validate-artifacts.sh 'artifact validation cryptographically verifies the UKI PE signature'
 # shellcheck disable=SC2016
 require_fixed 'cmp -- "$uki" "$scratch/embedded-uki.efi"' scripts/validate-artifacts.sh 'initial installation authenticates the UKI embedded in the published disk'
+require_fixed "('c12a7328-f81f-11d2-ba4b-00a0c93ec93b', 'ParticleESP')" scripts/validate-artifacts.sh 'artifact validation requires the ESP GPT label used by the mount unit'
 require_fixed 'etc/ipe/ipe-policy\.p7b' scripts/validate-artifacts.sh 'artifact validation inspects the signed UKI for the IPE policy'
 require_fixed 'particleos-containerhost-repart-archive' mkosi.scripts/obs-build 'the OBS signing stage uses the hostile-input archive policy'
 require_fixed 'upstream_sources=/usr/src/packages/SOURCES' mkosi.scripts/obs-build 'the stable mkosi signer reads only the validated staged source closure'

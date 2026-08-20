@@ -103,6 +103,7 @@ mapfile -t build_definitions < <(find "$definitions" -maxdepth 1 -type f -name '
 [[ ${#build_definitions[@]} -eq 4 ]]
 grep -RqxF 'Type=usr-verity-sig' "$definitions"
 grep -RqxF "Label=${image_id}_${image_version}_vsig" "$definitions"
+grep -RqxF 'Label=ParticleESP' "$definitions"
 
 # The distributable image contains the signed active slot. systemd-repart adds
 # the empty alternate slot and encrypted state partition on first boot. Read
@@ -135,13 +136,13 @@ for index in range(count):
     entries.append((type_id, attributes, label))
 
 expected = {
-    ('c12a7328-f81f-11d2-ba4b-00a0c93ec93b', 'esp'),
+    ('c12a7328-f81f-11d2-ba4b-00a0c93ec93b', 'ParticleESP'),
     ('e7bb33fb-06cf-4e81-8273-e543b413e2e2', f'{image_id}_{version}_vsig'),
     ('77ff5f63-e7b6-4633-acf4-1565b864c0e6', f'{image_id}_{version}_verity'),
     ('8484680c-9521-48c6-9c11-b0720656f69e', f'{image_id}_{version}'),
 }
 assert {(type_id, label) for type_id, _, label in entries} == expected, entries
-assert all(attributes & (1 << 60) for _, attributes, label in entries if label != 'esp')
+assert all(attributes & (1 << 60) for _, attributes, label in entries if label != 'ParticleESP')
 PY
 
 runtime="$repository/mkosi.extra/usr/lib/repart.d"
