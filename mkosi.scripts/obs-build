@@ -8,16 +8,24 @@ signing_wrapper=$sources/particleos-containerhost-obs-build
 archive_helper=$sources/particleos-containerhost-repart-archive
 gate=$sources/particleos-containerhost-security-gate
 
+gate_fail() {
+    echo "Signing-pass security gate failed: $*" >&2
+    exit 1
+}
+
 if [[ -x $repository/scripts/validate.sh ]]; then
     "$repository/scripts/validate.sh"
 elif [[ -f $gate && -f $signing_wrapper && -f $archive_helper ]]; then
-    [[ $(grep -c '^validation=passed$' "$gate") -eq 1 ]]
+    validation_count=$(grep -c '^validation=passed$' "$gate" || true)
+    [[ $validation_count == 1 ]] || gate_fail "expected exactly one validation=passed assertion"
     wrapper_digest=$(sed -n 's/^obs_build_sha256=//p' "$gate")
     archive_digest=$(sed -n 's/^archive_helper_sha256=//p' "$gate")
     [[ $wrapper_digest =~ ^[0-9a-f]{64}$ &&
-       $archive_digest =~ ^[0-9a-f]{64}$ ]]
-    [[ $(sha256sum -- "$signing_wrapper" | awk '{print $1}') == "$wrapper_digest" ]]
-    [[ $(sha256sum -- "$archive_helper" | awk '{print $1}') == "$archive_digest" ]]
+       $archive_digest =~ ^[0-9a-f]{64}$ ]] || gate_fail "malformed attested SHA-256 digest"
+    actual_wrapper_digest=$(sha256sum -- "$signing_wrapper" | awk '{print $1}')
+    actual_archive_digest=$(sha256sum -- "$archive_helper" | awk '{print $1}')
+    [[ $actual_wrapper_digest == "$wrapper_digest" ]] || gate_fail "OBS build wrapper digest mismatch"
+    [[ $actual_archive_digest == "$archive_digest" ]] || gate_fail "repart archive validator digest mismatch"
 else
     echo "Repository security validation or its signing-pass attestation is unavailable" >&2
     exit 1
