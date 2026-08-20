@@ -281,6 +281,7 @@ require_fixed 'gpgv --keyring' scripts/validate-artifacts.sh 'artifact validatio
 require_fixed 'sbverify --cert' scripts/validate-artifacts.sh 'artifact validation cryptographically verifies the UKI PE signature'
 require_fixed 'etc/ipe/ipe-policy\.p7b' scripts/validate-artifacts.sh 'artifact validation inspects the signed UKI for the IPE policy'
 require_fixed 'particleos-containerhost-repart-archive' mkosi.scripts/obs-build 'the OBS signing stage uses the hostile-input archive policy'
+require_fixed 'upstream_sources=/usr/src/packages/SOURCES' mkosi.scripts/obs-build 'the stable mkosi signer reads only the validated staged source closure'
 require_fixed 'BuildSources=/usr/src/packages/SOURCES:/usr/src/packages/SOURCES' mkosi.scripts/obs-postoutput 'the complete signing inputs remain in the OBS source closure'
 require_fixed 'BuildScripts=/usr/bin/make' mkosi.scripts/obs-postoutput 'OBS source-mode normalization cannot disable the signing gate'
 require_fixed 'MAKEFLAGS=--file=/work/src/usr/src/packages/SOURCES/particleos-containerhost-signing.mk' mkosi.scripts/obs-postoutput 'the executable make handoff selects only the generated signing recipe'

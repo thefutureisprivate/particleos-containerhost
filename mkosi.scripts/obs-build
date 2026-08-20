@@ -121,8 +121,9 @@ tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" \
     -cf "$staged_archive" -C "$definitions" "${definition_names[@]}"
 
 patched_helper="$scratch/mkosi.build"
-sed -e "s#^cp -r $sources/#cp -rL $staged/#" \
-    -e "s#$sources#$staged#g" \
+upstream_sources=/usr/src/packages/SOURCES
+sed -e "s#^cp -r $upstream_sources/#cp -rL $staged/#" \
+    -e "s#$upstream_sources#$staged#g" \
     "$upstream_helper" >"$patched_helper"
 grep -qF "cp -rL $staged/" "$patched_helper"
 chmod 0755 "$patched_helper"
