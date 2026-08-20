@@ -3,6 +3,8 @@
 [Unit]
 Description=ParticleOS EFI System Partition
 Documentation=https://github.com/thefutureisprivate/particleos-containerhost#architecture
+Requires=particleos-esp-module.service
+After=particleos-esp-module.service
 
 [Mount]
 What=/dev/disk/by-partlabel/ParticleESP

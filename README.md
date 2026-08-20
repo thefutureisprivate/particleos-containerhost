@@ -270,7 +270,9 @@ state. A mandatory `efi.mount` resolves the stable `ParticleESP` GPT label and
 mounts it at `/efi` with root-only, `nodev,nosuid,noexec` options. This remains
 reliable on first boot, when formatting happens too late for the initrd's
 earlier GPT auto-discovery pass, and gives UKI admission and updates one
-unambiguous boot-manager path.
+unambiguous boot-manager path. A narrowly confined early unit loads only the
+signed `vfat` module needed by this mount; container and network modules remain
+in the later fixed preload before irreversible module lockdown.
 
 systemd-repart initially creates the LUKS2 state token against PCR 7 so the
 first boot can create the machine-local policy. The enrollment service predicts

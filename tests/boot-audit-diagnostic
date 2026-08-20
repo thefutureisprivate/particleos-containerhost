@@ -1,0 +1,20 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -uo pipefail
+
+[[ ! -e /etc/initrd-release ]] || exit 0
+
+exec >/dev/ttyS0 2>&1
+printf 'PARTICLEOS_BOOT_AUDIT_DIAGNOSTIC_BEGIN\n'
+udevadm settle --timeout=20 || true
+printf '%s\n' '--- GPT/udev partition identities ---'
+udevadm info --query=property /dev/vda1 2>/dev/null |
+    grep -E '^(DEVNAME|ID_PART_ENTRY_NAME|ID_PART_ENTRY_TYPE)=' || true
+printf '%s\n' '--- persistent partition-label links ---'
+ls -la /dev/disk/by-partlabel 2>/dev/null || true
+printf '%s\n' '--- EFI mount job ---'
+systemctl --no-pager --full status efi.mount 2>&1 || true
+findmnt --target /efi 2>/dev/null || true
+printf '%s\n' '--- remaining boot jobs ---'
+systemctl --no-pager --plain list-jobs 2>&1 || true
+printf 'PARTICLEOS_BOOT_AUDIT_DIAGNOSTIC_END\n'

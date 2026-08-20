@@ -123,6 +123,8 @@ audit_service=$(base64 -w0 "$repository/tests/vm-audit-getty.conf")
 audit_script=$(base64 -w0 "$repository/tests/vm-audit.sh")
 audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
 pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
+boot_diagnostic_service=$(base64 -w0 "$repository/tests/boot-audit-diagnostic.conf")
+boot_diagnostic_script=$(base64 -w0 "$repository/tests/boot-audit-diagnostic")
 
 run_boot() {
     local boot_number=$1
@@ -166,6 +168,8 @@ run_boot() {
             -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit=$audit_service" \
             -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate" \
             -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service" \
+            -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script" \
             -smbios "type=11,value=io.systemd.credential.binary:vm-audit=$audit_script"; then
         qemu_active=0
         stop_tpm

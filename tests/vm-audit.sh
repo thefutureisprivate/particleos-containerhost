@@ -43,6 +43,12 @@ if [[ $boot_path == /efi ]] && systemctl is-active --quiet efi.mount &&
 else
     fail 'the mandatory EFI mount unit owns the boot-manager path'
 fi
+if systemctl is-active --quiet particleos-esp-module.service &&
+        grep -qE '^vfat ' /proc/modules; then
+    pass 'the signed vfat module loaded before the EFI mount'
+else
+    fail 'the signed vfat module loaded before the EFI mount'
+fi
 check_grep 'kernel lockdown is in confidentiality mode' '\[confidentiality\]' /sys/kernel/security/lockdown
 check_grep 'IPE enforcement is requested by the signed UKI' '(^| )ipe\.enforce=1( |$)' /proc/cmdline
 check_grep 'null-key boot credentials are rejected by the signed UKI' '(^| )systemd\.credentials_boot_policy=strict( |$)' /proc/cmdline

@@ -231,6 +231,14 @@ require_fixed 'Label=ParticleESP' mkosi.extra/usr/lib/repart.d/00-esp.conf 'runt
 require_fixed 'What=/dev/disk/by-partlabel/ParticleESP' mkosi.extra/usr/lib/systemd/system/efi.mount 'the ESP mount resolves only the labeled ESP partition'
 require_fixed 'Where=/efi' mkosi.extra/usr/lib/systemd/system/efi.mount 'the ESP has one explicit boot-manager path'
 require_fixed 'Options=umask=0077,nodev,nosuid,noexec' mkosi.extra/usr/lib/systemd/system/efi.mount 'the writable ESP is root-only and non-executable after boot'
+require_fixed 'Requires=particleos-esp-module.service' mkosi.extra/usr/lib/systemd/system/efi.mount 'the ESP mount requires its early signed filesystem module'
+require_fixed 'DefaultDependencies=no' mkosi.extra/usr/lib/systemd/system/particleos-esp-module.service 'the ESP filesystem module can load before local filesystems'
+require_fixed 'ExecStart=/usr/sbin/modprobe -- vfat' mkosi.extra/usr/lib/systemd/system/particleos-esp-module.service 'the early module loader is limited to vfat'
+if grep -qxF 'vfat' mkosi.extra/usr/lib/particleos/modules.conf; then
+    fail 'the early ESP module is absent from the later container module list'
+else
+    pass 'the early ESP module is absent from the later container module list'
+fi
 require_fixed 'Requires=efi.mount' mkosi.extra/usr/lib/systemd/system/local-fs.target.d/40-particleos-esp.conf 'local filesystems require the explicit ESP mount'
 require_fixed 'RequiresMountsFor=/efi' mkosi.extra/usr/lib/systemd/system/particleos-pcrlock-enroll.service 'PCR enrollment cannot proceed without the mounted ESP'
 require_fixed 'LoadCredential=vm-audit' tests/vm-audit-getty.conf 'VM audit is injected without modifying the image'
@@ -268,12 +276,16 @@ require_fixed 'the immutable update trust key has an importd-readable label' tes
 require_fixed 'the udev compatibility control link is available' tests/vm-audit.sh 'VM audit verifies the udev control path'
 require_fixed 'bootctl --print-boot-path' tests/vm-audit.sh 'VM audit asks the boot manager for its active ESP path'
 require_fixed 'systemctl is-active --quiet efi.mount' tests/vm-audit.sh 'VM audit requires the explicit ESP mount unit to be active'
+require_fixed 'systemctl is-active --quiet particleos-esp-module.service' tests/vm-audit.sh 'VM audit proves the early ESP module service completed'
 # shellcheck disable=SC2016
 require_fixed 'mountpoint -q "$boot_path"' tests/vm-audit.sh 'VM audit proves the ESP is mounted rather than a plain directory'
 require_fixed 'systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit' tests/run-vm-audit.sh 'VM runner replaces the generated primary console command with the audit'
 require_fixed 'systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit' tests/run-vm-audit.sh 'mandatory root-remount completion explicitly starts the injected audit unit'
 require_fixed 'ExecStartPost=/usr/bin/systemctl --no-block start getty@tty1.service' tests/audit-activate.conf 'credential-backed test activation starts without blocking sysinit'
 require_fixed 'systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit' tests/run-vm-audit.sh 'PCR enrollment output is captured by the audit console'
+require_fixed 'systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit' tests/run-vm-audit.sh 'VM audit captures post-udev ESP diagnostics'
+require_fixed '[[ ! -e /etc/initrd-release ]] || exit 0' tests/boot-audit-diagnostic 'VM diagnostics do not condition or suppress initrd udev coldplug'
+require_fixed 'ID_PART_ENTRY_NAME' tests/boot-audit-diagnostic 'VM boot diagnostics expose the udev GPT identity'
 require_fixed 'systemd.mask=serial-getty@ttyS0.service' tests/run-vm-audit.sh 'VM runner reserves the serial console for complete audit output'
 # shellcheck disable=SC2016
 require_fixed 'readonly=on,file=$container_fixture' tests/run-vm-audit.sh 'VM runner attaches the signed-container fixture read-only'
@@ -292,6 +304,7 @@ require_fixed 'BASE_ARTIFACT_DIRECTORY CANDIDATE_ARTIFACT_DIRECTORY' tests/run-u
 require_fixed 'systemd.unit-dropin.getty@tty1.service~90-particleos-update-audit' tests/run-update-rollback-audit.sh 'update audit uses the generated primary console activation slot'
 require_fixed 'systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit' tests/run-update-rollback-audit.sh 'update audit starts from a mandatory boot unit on initial and later boots'
 require_fixed 'systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit' tests/run-update-rollback-audit.sh 'update audit captures PCR enrollment output'
+require_fixed 'systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit' tests/run-update-rollback-audit.sh 'update audit captures post-udev ESP diagnostics'
 reject_fixed 'After=multi-user.target' tests/update-rollback-audit-getty.conf 'update audit avoids a target ordering cycle in the generated getty transaction'
 reject_fixed 'particleos-workload-health.service' tests/update-rollback-audit-getty.conf 'update scenarios control optional health without an activation-cycle dependency'
 require_fixed 'systemd.extra-unit.particleos-workload-health.service' tests/run-update-rollback-audit.sh 'rollback audit injects counted-deployment workload-health failure'
