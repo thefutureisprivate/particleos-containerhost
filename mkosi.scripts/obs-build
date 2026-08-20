@@ -33,6 +33,13 @@ else
     exit 1
 fi
 
+# The detached-signature pass runs in a disposable OBS worker and contains no
+# private key material. Trace its local input-selection boundary so a rejected
+# handoff is independently diagnosable from the public build log.
+if [[ -f $sources/hashes.cpio.rsasign.sig ]]; then
+    set -x
+fi
+
 resource_dir="$(/usr/bin/python3 -c '
 from pathlib import Path
 import mkosi.resources
@@ -119,6 +126,7 @@ sed -e "s#^cp -r $sources/#cp -rL $staged/#" \
     "$upstream_helper" >"$patched_helper"
 grep -qF "cp -rL $staged/" "$patched_helper"
 chmod 0755 "$patched_helper"
+set +x
 "$patched_helper" "$@"
 
 install -m0644 "$staged_archive" "$output/${repart_archive##*/}"
