@@ -264,7 +264,9 @@ host-only blessing.
 
 The disk contains an ESP, two `/usr` + verity + verity-signature slot triples,
 and one encrypted mutable-state partition. systemd-sysupdate writes the
-inactive UKI and operating-system slot as one deployment.
+inactive UKI and operating-system slot as one deployment. The factory root
+provides `/efi` and `/boot`; systemd's GPT discovery mounts the ESP at `/efi`,
+which is the single boot-manager path used for UKI admission and updates.
 
 systemd-repart initially creates the LUKS2 state token against PCR 7 so the
 first boot can create the machine-local policy. The enrollment service predicts
@@ -442,6 +444,7 @@ sysctl kernel.yama.ptrace_scope kernel.modules_disabled
 cat /sys/kernel/security/ipe/policies/*/active
 findmnt -no SOURCE,FSTYPE,OPTIONS /
 findmnt -no SOURCE,FSTYPE,OPTIONS /usr
+findmnt -no SOURCE,FSTYPE,OPTIONS /efi
 podman info --format '{{.Host.OCIRuntime.Name}} {{.Host.Security.Rootless}}'
 systemd-sysupdate list
 systemctl --failed
@@ -482,6 +485,10 @@ Then run the complete local VM audit:
   /path/to/container-fixture.raw
 ```
 
+Set `VM_AUDIT_DISPLAY=gtk` to open the guest display for every boot. The
+serial audit log remains authoritative and is still captured in the test
+directory. Omit the variable for headless automation.
+
 The enrollment boot retains PCR 7 and reboots. The next boot proves the exact
 PCR 7+11 token before removing bootstrap, then verifies Secure Boot, signed UKI
 and dm-verity, SELinux, IPE, `gvisor_t`, update policy, optional workload
@@ -510,6 +517,9 @@ releases and the same enrolled OVMF variable store:
   /path/to/candidate-artifacts \
   /path/to/enrolled-ovmf-vars.bin
 ```
+
+Set `VM_UPDATE_AUDIT_DISPLAY=gtk` to show each update and rollback boot in a
+local QEMU window.
 
 The first scenario downloads the candidate through the production
 systemd-sysupdate configuration, first proves that a renamed older signed UKI

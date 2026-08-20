@@ -16,6 +16,7 @@ ovmf_code=$(realpath "$ovmf_code")
 audit_timeout=${VM_AUDIT_TIMEOUT:-300}
 audit_tmpdir=${VM_AUDIT_TMPDIR:-$artifact_directory}
 keep_failed=${VM_AUDIT_KEEP_FAILED:-0}
+vm_display=${VM_AUDIT_DISPLAY:-none}
 
 [[ $audit_timeout =~ ^[1-9][0-9]*$ ]] || {
     echo 'VM_AUDIT_TIMEOUT must be a positive number of seconds' >&2
@@ -23,6 +24,10 @@ keep_failed=${VM_AUDIT_KEEP_FAILED:-0}
 }
 [[ $keep_failed == 0 || $keep_failed == 1 ]] || {
     echo 'VM_AUDIT_KEEP_FAILED must be 0 or 1' >&2
+    exit 2
+}
+[[ $vm_display == none || $vm_display == gtk ]] || {
+    echo 'VM_AUDIT_DISPLAY must be none or gtk' >&2
     exit 2
 }
 [[ -r /dev/kvm && -w /dev/kvm ]] || {
@@ -114,9 +119,9 @@ cp --reflink=auto --sparse=always "$ovmf_vars_source" "$ovmf_vars"
 zstd --sparse -q -d -f -o "$disk" "${compressed_images[0]}"
 truncate -s 16G "$disk"
 
-audit_service=$(base64 -w0 "$repository/tests/vm-audit.service")
-audit_target=$(base64 -w0 "$repository/tests/vm-audit.target")
+audit_service=$(base64 -w0 "$repository/tests/vm-audit-getty.conf")
 audit_script=$(base64 -w0 "$repository/tests/vm-audit.sh")
+audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
 
 run_boot() {
     local boot_number=$1
@@ -152,13 +157,13 @@ run_boot() {
             -device tpm-tis,tpmdev=tpm0 \
             -netdev user,id=net0 \
             -device virtio-net-pci,netdev=net0 \
-            -display none \
+            -display "$vm_display" \
             -serial "file:$log" \
             -monitor none \
             -no-reboot \
-            -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.unit=vm-audit.target systemd.mask=serial-getty@ttyS0.service' \
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.vm-audit.service=$audit_service" \
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.vm-audit.target=$audit_target" \
+            -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service' \
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit=$audit_service" \
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.preset-global.service~90-particleos-audit=$audit_activate" \
             -smbios "type=11,value=io.systemd.credential.binary:vm-audit=$audit_script"; then
         qemu_active=0
         stop_tpm

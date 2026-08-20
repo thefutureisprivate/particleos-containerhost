@@ -17,6 +17,7 @@ audit_timeout=${VM_UPDATE_AUDIT_TIMEOUT:-900}
 denial_timeout=${VM_UPDATE_DENIAL_TIMEOUT:-80}
 audit_tmpdir=${VM_UPDATE_AUDIT_TMPDIR:-$base_artifacts}
 keep_failed=${VM_UPDATE_AUDIT_KEEP_FAILED:-0}
+vm_display=${VM_UPDATE_AUDIT_DISPLAY:-none}
 
 for value in "$audit_timeout" "$denial_timeout"; do
     [[ $value =~ ^[1-9][0-9]*$ ]] || {
@@ -26,6 +27,10 @@ for value in "$audit_timeout" "$denial_timeout"; do
 done
 [[ $keep_failed == 0 || $keep_failed == 1 ]] || {
     echo 'VM_UPDATE_AUDIT_KEEP_FAILED must be 0 or 1' >&2
+    exit 2
+}
+[[ $vm_display == none || $vm_display == gtk ]] || {
+    echo 'VM_UPDATE_AUDIT_DISPLAY must be none or gtk' >&2
     exit 2
 }
 [[ -r /dev/kvm && -w /dev/kvm ]] || {
@@ -89,9 +94,9 @@ latest_version=$(printf '%s\n%s\n' "$base_version" "$candidate_version" | sort -
 # Keeping this reference makes the required local evidence explicit.
 [[ -s $candidate_image ]]
 
-audit_service=$(base64 -w0 "$repository/tests/update-rollback-audit.service")
-audit_target=$(base64 -w0 "$repository/tests/update-rollback-audit.target")
+audit_service=$(base64 -w0 "$repository/tests/update-rollback-audit-getty.conf")
 audit_script=$(base64 -w0 "$repository/tests/update-rollback-audit.sh")
+audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
 health_service=$(base64 -w0 "$repository/tests/update-rollback-health.service")
 health_script=$(base64 -w0 "$repository/tests/update-rollback-health.sh")
 base_credential=$(printf '%s\n' "$base_version" | base64 -w0)
@@ -220,13 +225,13 @@ run_guest() {
         -device tpm-tis,tpmdev=tpm0 \
         -netdev user,id=net0 \
         -device virtio-net-pci,netdev=net0 \
-        -display none \
+        -display "$vm_display" \
         -serial "file:$log" \
         -monitor none \
         -no-reboot \
-        -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.unit=update-rollback-audit.target systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.update-rollback-audit.service=$audit_service" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.update-rollback-audit.target=$audit_target" \
+        -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-update-audit=$audit_service" \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.preset-global.service~90-particleos-audit=$audit_activate" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.extra-unit.particleos-workload-health.service=$health_service" \
         -smbios "type=11,value=io.systemd.credential.binary:update-rollback-audit=$audit_script" \
         -smbios "type=11,value=io.systemd.credential.binary:update-rollback-health=$health_script" \
