@@ -212,10 +212,16 @@ reject_fixed 'iifname "podman*" accept' "$firewall" 'no unrestricted workload fo
 reject_fixed 'oifname "podman*" ct status dnat accept' "$firewall" 'no unrestricted DNAT forwarding remains'
 require_fixed 'include "/etc/particleos/nftables.d/*.nft"' "$firewall" 'root-owned exact forwarding policy persists across boot'
 reject_fixed 'flush ruleset' "$firewall" 'host policy does not erase Netavark rules'
-require_fixed 'nft_hash' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables meter support loads before module lockdown'
-require_fixed 'nft_limit' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables rate limiting loads before module lockdown'
-require_fixed 'Requires=systemd-modules-load.service' mkosi.extra/usr/lib/systemd/system/systemd-udev-trigger.service.d/40-particleos-modules.conf 'udev coldplug requires the fixed module preload'
-require_fixed 'After=systemd-modules-load.service' mkosi.extra/usr/lib/systemd/system/systemd-udev-trigger.service.d/40-particleos-modules.conf 'udev coldplug is serialized after the fixed module preload'
+require_fixed 'nft_hash' mkosi.extra/usr/lib/particleos/modules 'nftables meter support loads before module lockdown'
+require_fixed 'nft_limit' mkosi.extra/usr/lib/particleos/modules 'nftables rate limiting loads before module lockdown'
+require_fixed 'After=local-fs.target systemd-udevd.service' mkosi.extra/usr/lib/systemd/system/particleos-module-preload.service 'the fixed module preload runs after early sysinit concurrency'
+require_fixed 'Before=nftables.service particleos-module-lockdown.service network-pre.target' mkosi.extra/usr/lib/systemd/system/particleos-module-preload.service 'the fixed module preload completes before the firewall and network'
+require_fixed 'Requires=particleos-module-preload.service' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'the firewall requires the fixed module preload'
+if [[ ! -e mkosi.extra/usr/lib/modules-load.d/particleos.conf ]]; then
+    pass 'the fixed module set is not loaded during early sysinit'
+else
+    fail 'the fixed module set is not loaded during early sysinit'
+fi
 reject_fixed 'nft delete table inet particleos_filter' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall startup has no expected deletion error'
 require_fixed 'LoadCredential=vm-audit' tests/vm-audit.service 'VM audit is injected without modifying the image'
 require_fixed 'SuccessAction=poweroff' tests/vm-audit.service 'successful VM audits power off the guest'

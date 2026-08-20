@@ -1,4 +1,4 @@
-# Container storage, rootful netavark networking, and immutable boot support.
+# Container storage, rootful Netavark networking, and immutable boot support.
 dm_crypt
 btrfs
 overlay

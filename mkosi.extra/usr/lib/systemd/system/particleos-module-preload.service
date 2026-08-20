@@ -1,0 +1,25 @@
+[Unit]
+Description=Load the fixed ParticleOS kernel module set
+DefaultDependencies=no
+Requires=local-fs.target
+After=local-fs.target systemd-udevd.service
+Before=nftables.service particleos-module-lockdown.service network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/particleos/load-modules
+CapabilityBoundingSet=CAP_SYS_MODULE
+LockPersonality=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateIPC=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
