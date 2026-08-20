@@ -235,6 +235,12 @@ done
 for module in nft_hash nft_limit; do
     if [[ -d /sys/module/$module ]]; then pass "$module loaded before lockdown"; else fail "$module loaded before lockdown"; fi
 done
+udev_trigger_after=$(systemctl show systemd-udev-trigger.service --property=After --value)
+if grep -qw systemd-modules-load.service <<<"$udev_trigger_after"; then
+    pass 'image module preload completes before udev coldplug'
+else
+    fail 'image module preload completes before udev coldplug'
+fi
 if [[ $(sysctl -n kernel.modules_disabled) == 1 ]]; then
     pass 'kernel module loading is irreversibly disabled'
 else

@@ -214,6 +214,8 @@ require_fixed 'include "/etc/particleos/nftables.d/*.nft"' "$firewall" 'root-own
 reject_fixed 'flush ruleset' "$firewall" 'host policy does not erase Netavark rules'
 require_fixed 'nft_hash' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables meter support loads before module lockdown'
 require_fixed 'nft_limit' mkosi.extra/usr/lib/modules-load.d/particleos.conf 'nftables rate limiting loads before module lockdown'
+require_fixed 'Requires=systemd-modules-load.service' mkosi.extra/usr/lib/systemd/system/systemd-udev-trigger.service.d/40-particleos-modules.conf 'udev coldplug requires the fixed module preload'
+require_fixed 'After=systemd-modules-load.service' mkosi.extra/usr/lib/systemd/system/systemd-udev-trigger.service.d/40-particleos-modules.conf 'udev coldplug is serialized after the fixed module preload'
 reject_fixed 'nft delete table inet particleos_filter' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall startup has no expected deletion error'
 require_fixed 'LoadCredential=vm-audit' tests/vm-audit.service 'VM audit is injected without modifying the image'
 require_fixed 'SuccessAction=poweroff' tests/vm-audit.service 'successful VM audits power off the guest'
