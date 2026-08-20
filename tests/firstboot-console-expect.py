@@ -17,6 +17,22 @@ PROMPTS = (
     (b"Please enter user name to create", b"particleadmin\n"),
     (b"Please enter new password for user particleadmin:", b"ParticleOS-Test-Run0-261!\n"),
     (b"Please enter new password for user particleadmin (repeat):", b"ParticleOS-Test-Run0-261!\n"),
+    (b"login:", b"particleadmin\n"),
+    (b"Password:", b"ParticleOS-Test-Run0-261!\n"),
+    (
+        b"PARTICLEOS_ADMIN_SHELL_READY",
+        b"run0 --no-ask-password --pipe /usr/bin/true && "
+        b"echo PARTICLEOS_FIRSTBOOT_CONSOLE_FAIL run0-accepted-without-auth || "
+        b"echo PARTICLEOS_RUN0_NOAUTH_DENIED; "
+        b"run0 --pipe /usr/bin/bash -c 'test \"$(/usr/bin/id -u)\" = 0 && "
+        b"! /usr/sbin/ausearch -m AVC -ts boot 2>/dev/null | "
+        b"/usr/bin/grep -Eiq \"homed|homework|fsadm|policykit|run0|login\" && "
+        b"/usr/sbin/ausearch -m USER_AUTH,USER_ACCT -ts boot 2>/dev/null | "
+        b"/usr/bin/grep -q \"acct=\\\"particleadmin\\\"\"' && "
+        b"echo PARTICLEOS_FIRSTBOOT_CONSOLE_PASS "
+        b"user=particleadmin timezone=Etc/UTC run0=authenticated; exit\n",
+    ),
+    (b"Password:", b"ParticleOS-Test-Run0-261!\n"),
 )
 
 
@@ -39,6 +55,7 @@ def main() -> int:
     timeout = int(os.environ.get("FIRSTBOOT_VM_TIMEOUT", "300"))
     deadline = time.monotonic() + timeout
     transcript = bytearray()
+    pending = bytearray()
     prompt_index = 0
     process = subprocess.Popen(
         sys.argv[3:],
@@ -66,12 +83,15 @@ def main() -> int:
                     sys.stdout.buffer.write(chunk)
                     sys.stdout.buffer.flush()
                     transcript.extend(chunk)
+                    pending.extend(chunk)
                     if prompt_index < len(PROMPTS):
                         prompt, answer = PROMPTS[prompt_index]
-                        if prompt in transcript:
-                            process.stdin.write(answer)
-                            process.stdin.flush()
+                        if prompt in pending:
+                            if answer is not None:
+                                process.stdin.write(answer)
+                                process.stdin.flush()
                             prompt_index += 1
+                            pending.clear()
             remainder = process.stdout.read()
             if remainder:
                 log.write(remainder)
@@ -93,6 +113,9 @@ def main() -> int:
         print(f"first-boot prompt was not observed: {missing}", file=sys.stderr)
         return 1
     if b"PARTICLEOS_FIRSTBOOT_CONSOLE_FAIL " in transcript:
+        return 1
+    if b"PARTICLEOS_RUN0_NOAUTH_DENIED" not in transcript:
+        print("run0 did not report its unauthenticated denial", file=sys.stderr)
         return 1
     if b"PARTICLEOS_FIRSTBOOT_CONSOLE_PASS " not in transcript:
         print("first-boot guest audit did not report success", file=sys.stderr)
