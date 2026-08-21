@@ -405,6 +405,9 @@ require_fixed 'systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-au
 reject_fixed 'After=multi-user.target' tests/update-rollback-audit-getty.conf 'update audit avoids a target ordering cycle in the generated getty transaction'
 reject_fixed 'particleos-workload-health.service' tests/update-rollback-audit-getty.conf 'update scenarios control optional health without an activation-cycle dependency'
 require_fixed 'systemd.unit-dropin.particleos-workload-health.service~90-particleos-update-audit' tests/run-update-rollback-audit.sh 'rollback audit replaces only the production health probe'
+# shellcheck disable=SC2016
+require_fixed 'pcrlock.${IMAGE_ID}.cred' tests/update-rollback-audit.sh 'update audit requires one stable image-scoped pcrlock boot credential on every boot'
+require_fixed 'pcrlock.ParticleOS-Host.cred' tests/vm-audit.sh 'full VM audit rejects transient-machine-ID pcrlock boot credentials'
 require_fixed 'UPDATE_ROLLBACK_AUDIT_OLD_UKI_REJECT' tests/update-rollback-audit.sh 'rollback audit reproduces and rejects renamed old signed UKI admission'
 require_fixed 'UPDATE_ROLLBACK_AUDIT_JSON' tests/update-rollback-audit.sh 'update audit verifies stable systemd machine-readable candidate metadata'
 require_fixed 'systemctl status --no-pager --full systemd-sysupdate.service' tests/update-rollback-audit.sh 'update audit preserves the production service failure cause'
