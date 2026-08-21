@@ -57,6 +57,7 @@ if [[ ! -e $pending ]]; then
     # next boot must prove the exact PCR 7+11 token before any TPM2 enrollment
     # is removed.
     systemctl --no-block reboot
+    echo "PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED boot=$boot_id"
     exit 0
 fi
 

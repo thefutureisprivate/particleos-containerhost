@@ -190,8 +190,10 @@ run_boot() {
 
     if [[ $expectation == enrollment ]]; then
         if grep -q 'PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED ' "$log" &&
+                grep -q 'PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED ' "$log" &&
                 ! grep -q '^PARTICLEOS_VM_AUDIT_FAIL ' "$log"; then
             grep 'PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED ' "$log" | tail -n1
+            grep 'PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED ' "$log" | tail -n1
             return 0
         fi
     elif grep -q '^PARTICLEOS_VM_AUDIT_PASS ' "$log" &&

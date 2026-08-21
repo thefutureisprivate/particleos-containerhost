@@ -93,6 +93,7 @@ require_fixed '--wipe-slot=tpm2' mkosi.extra/usr/lib/particleos/pcrlock-enroll '
 # shellcheck disable=SC2016
 require_fixed '[[ $current_boot != "$previous_boot" ]]' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap removal requires a different boot ID'
 require_fixed 'systemctl --no-block reboot' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap migration queues the proof reboot'
+require_fixed 'PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap migration reports an accepted reboot transaction'
 reject_fixed 'while :' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'the enrollment start job cannot deadlock its queued reboot'
 require_fixed 'ExecStart=/usr/lib/particleos/sysupdate' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate.service.d/40-particleos-egress.conf 'the authenticated update wrapper owns PCR admission'
 require_fixed 'Type=oneshot' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate.service.d/40-particleos-egress.conf 'PCR authorization waits for every update transfer to commit'
@@ -367,6 +368,7 @@ require_fixed 'systemd.mask=serial-getty@ttyS0.service' tests/run-vm-audit.sh 'V
 # shellcheck disable=SC2016
 require_fixed 'readonly=on,file=$container_fixture' tests/run-vm-audit.sh 'VM runner attaches the signed-container fixture read-only'
 require_fixed 'run_boot 1 enrollment' tests/run-vm-audit.sh 'VM runner stages PCR7+11 while retaining bootstrap'
+require_fixed 'PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED ' tests/run-vm-audit.sh 'VM runner requires the enrollment proof reboot transaction'
 require_fixed 'run_boot 2 audit' tests/run-vm-audit.sh 'VM runner proves the PCR7+11 token on a later boot'
 require_fixed 'run_boot 3 audit' tests/run-vm-audit.sh 'VM runner audits persistent TPM unlock'
 require_fixed 'stop_tpm' tests/run-vm-audit.sh 'VM runner stops its TPM emulator after every boot'
@@ -416,6 +418,7 @@ require_fixed 'UPDATE_ROLLBACK_AUDIT_OLD_UKI_REJECT' tests/update-rollback-audit
 require_fixed 'UPDATE_ROLLBACK_AUDIT_JSON' tests/update-rollback-audit.sh 'update audit verifies stable systemd machine-readable candidate metadata'
 require_fixed 'systemctl status --no-pager --full systemd-sysupdate.service' tests/update-rollback-audit.sh 'update audit preserves the production service failure cause'
 require_fixed 'run_guest rollback-denial 0 enrollment' tests/run-update-rollback-audit.sh 'update audit preserves bootstrap through a separate enrollment boot'
+require_fixed 'PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED ' tests/run-update-rollback-audit.sh 'update audit requires the enrollment proof reboot transaction'
 require_fixed 'PARTICLEOS_WORKLOAD_CANDIDATE_REJECTED' tests/run-update-rollback-audit.sh 'rollback audit observes explicit rejection on the first unhealthy candidate boot'
 require_fixed 'run_guest health-fallback 3 clean' tests/run-update-rollback-audit.sh 'rollback audit requires an immediate known-good fallback boot'
 require_fixed 'run_guest rollback-denial 3 denied' tests/run-update-rollback-audit.sh 'rollback audit forces the superseded signed UKI after pruning'

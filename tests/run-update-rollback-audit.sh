@@ -274,6 +274,11 @@ run_guest() {
                 echo "$scenario bootstrap-enrollment boot did not stage the retained PCR 7 token" >&2
                 return 1
             }
+            grep -q 'PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED ' "$log" || {
+                tail -240 "$log" >&2 || true
+                echo "$scenario bootstrap-enrollment boot did not queue its proof reboot" >&2
+                return 1
+            }
         fi
     else
         if ((status != 124)); then
