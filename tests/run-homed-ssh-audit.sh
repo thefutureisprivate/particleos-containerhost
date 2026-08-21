@@ -50,6 +50,7 @@ mapfile -t compressed_images < <(
 }
 
 scratch=$(mktemp -d "$audit_tmpdir/.particleos-homed-ssh-audit.XXXXXXXX")
+socket_directory=$(mktemp -d /tmp/phs.XXXXXXXX)
 qemu_pid=
 swtpm_pid_file=$scratch/swtpm.pid
 
@@ -100,6 +101,10 @@ cleanup() {
     reap_qemu
     stop_tpm
     rm -rf -- "$snapshot_root"
+    if [[ -n ${socket_directory:-} && -d $socket_directory &&
+            ${socket_directory##*/} == phs.* ]]; then
+        rm -rf -- "$socket_directory"
+    fi
     if ((status != 0)) && [[ $keep_failed == 1 ]]; then
         echo "Preserved failed homed SSH audit state: $scratch" >&2
     elif [[ -n ${scratch:-} && -d $scratch &&
@@ -161,7 +166,7 @@ qemu_arguments=(
 )
 
 echo 'Staging the PCR 7+11 policy before provisioning the homed account...'
-tpm_socket=$scratch/tpm-enroll.sock
+tpm_socket=$socket_directory/enroll.sock
 start_tpm "$tpm_socket"
 if ! timeout --foreground --signal=TERM --kill-after=15s "$audit_timeout" \
         qemu-system-x86_64 "${qemu_arguments[@]}" \
@@ -181,7 +186,7 @@ grep -q 'PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED ' "$log" || {
 
 echo 'Booting with an inactive homed account and key-only SSH enabled...'
 : >"$log"
-tpm_socket=$scratch/tpm-ssh.sock
+tpm_socket=$socket_directory/ssh.sock
 start_tpm "$tpm_socket"
 qemu-system-x86_64 "${qemu_arguments[@]}" \
     -chardev "socket,id=chrtpm,path=$tpm_socket" \

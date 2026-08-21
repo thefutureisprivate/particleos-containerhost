@@ -565,6 +565,7 @@ require_fixed 'please enter password for user particleadmin' tests/homed-ssh-exp
 require_fixed 'PARTICLEOS_HOMED_SSH_UNLOCK_PASS' tests/homed-ssh-expect.py 'the SSH audit proves an interactive key-then-home-password login'
 require_fixed 'PARTICLEOS_HOMED_SSH_AVC_PASS' tests/homed-ssh-expect.py 'the SSH audit rejects SELinux denials on the unlock path'
 require_fixed 'HOMED_SSH_VM_DISPLAY:-gtk' tests/run-homed-ssh-audit.sh 'the homed SSH audit exposes a visible VM by default'
+require_fixed 'mktemp -d /tmp/phs.XXXXXXXX' tests/run-homed-ssh-audit.sh 'the homed SSH audit keeps TPM socket paths below the Unix socket limit'
 require_fixed 'ParticleOS homed SSH unlock audit passed' tests/run-homed-ssh-audit.sh 'the homed SSH runner has an unambiguous success marker'
 require_fixed 'Requires=particleos-pcrlock-enroll.service systemd-homed-firstboot.service particleos-network-security.target' tests/vm-audit-getty.conf 'the VM audit cannot race administrator creation or network security'
 require_fixed 'Requires=particleos-pcrlock-enroll.service systemd-homed-firstboot.service' tests/update-rollback-audit-getty.conf 'the update audit cannot race native administrator creation'
