@@ -14,8 +14,8 @@ mapfile -t upstream_helpers < <(
     exit 1
 }
 upstream_helper=${upstream_helpers[0]}
-expected_upstream_helper_digest=2f9616c19b7930e1b32429bccc5ba5a5622f33496da81daadbcab7c9a762c45b
-[[ $(rpm -qf --qf '%{NAME}\n' "$upstream_helper") == mkosi &&
+expected_upstream_helper_digest=fb44ed744620e4ea01d713ebe678ac935670007702c360a9961c35d248dae85e
+[[ $(rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}\n' "$upstream_helper") == 'mkosi 26-3.fc44' &&
    $(sha256sum -- "$upstream_helper" | cut -d ' ' -f1) == "$expected_upstream_helper_digest" ]] || {
     echo "Packaged mkosi.postoutput differs from reviewed upstream v26" >&2
     exit 1

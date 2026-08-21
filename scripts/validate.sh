@@ -653,8 +653,10 @@ reject_fixed 'PCR policy signing requires' mkosi.scripts/obs-build 'obsolete PCR
 # shellcheck disable=SC2016
 require_fixed 'sha256sum -- "${artifact_names[@]}"' mkosi.scripts/obs-build 'checksums are regenerated after final signed artifacts are staged'
 require_fixed 'final artifact set differs from the exact release schema' mkosi.scripts/obs-build 'OBS rejects incomplete or surplus signed artifact sets'
-require_fixed 'f5a12b2941b8976239ab08a593a2e75f12d0f2ec981abbce88426cd3019d598d' mkosi.scripts/obs-build 'the reviewed stable mkosi.build helper is pinned'
-require_fixed '2f9616c19b7930e1b32429bccc5ba5a5622f33496da81daadbcab7c9a762c45b' mkosi.scripts/obs-postoutput 'the reviewed stable mkosi.postoutput helper is pinned'
+require_fixed '0b20710d4dbe312616e660c7359fd836052584172c28ee59dc951afb464ce4e6' mkosi.scripts/obs-build 'the reviewed Fedora 44 mkosi.build helper is pinned'
+require_fixed 'fb44ed744620e4ea01d713ebe678ac935670007702c360a9961c35d248dae85e' mkosi.scripts/obs-postoutput 'the reviewed Fedora 44 mkosi.postoutput helper is pinned'
+require_fixed "== 'mkosi 26-3.fc44'" mkosi.scripts/obs-build 'the OBS signing helper package build is exact'
+require_fixed "== 'mkosi 26-3.fc44'" mkosi.scripts/obs-postoutput 'the OBS post-output helper package build is exact'
 require_fixed "[[ \$(mkosi --version) == 'mkosi 26' ]]" mkosi.scripts/obs-build 'OBS rejects a different mkosi release'
 # shellcheck disable=SC2016
 require_fixed 'sha256sum -c "$checksum_basename"' scripts/validate-artifacts.sh 'artifact validation verifies the authenticated checksum manifest'

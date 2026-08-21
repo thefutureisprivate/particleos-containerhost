@@ -46,8 +46,8 @@ mapfile -t upstream_helpers < <(
 )
 [[ ${#upstream_helpers[@]} -eq 1 ]] || gate_fail "cannot locate exactly one packaged mkosi.build helper"
 upstream_helper=${upstream_helpers[0]}
-expected_upstream_helper_digest=f5a12b2941b8976239ab08a593a2e75f12d0f2ec981abbce88426cd3019d598d
-[[ $(rpm -qf --qf '%{NAME}\n' "$upstream_helper") == mkosi &&
+expected_upstream_helper_digest=0b20710d4dbe312616e660c7359fd836052584172c28ee59dc951afb464ce4e6
+[[ $(rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}\n' "$upstream_helper") == 'mkosi 26-3.fc44' &&
    $(sha256sum -- "$upstream_helper" | cut -d ' ' -f1) == "$expected_upstream_helper_digest" ]] ||
     gate_fail "packaged mkosi.build differs from reviewed upstream v26"
 output=/work/src/usr/src/packages/OTHER
