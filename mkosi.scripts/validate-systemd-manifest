@@ -21,6 +21,7 @@ MANIFEST_NAME = re.compile(
     r"ParticleOS-Host_(?P<version>[0-9]+(?:[.][0-9]+){2})_x86-64[.]manifest[.]gz"
 )
 VERSION = re.compile(r"[0-9A-Za-z.+~^]+-[0-9A-Za-z.+~^]+")
+EXPECTED_SYSTEMD_VERSION = "261.2+5+gb40ecf731-57.14"
 EXPECTED_SYSTEMD_PACKAGES = frozenset(
     {
         "systemd",
@@ -38,6 +39,9 @@ EXPECTED_SYSTEMD_PACKAGES = frozenset(
     }
 )
 REQUIRED_RUNTIME_PACKAGES = frozenset({"podman", "runsc"})
+
+if VERSION.fullmatch(EXPECTED_SYSTEMD_VERSION) is None:
+    raise SystemExit("systemd manifest policy: invalid reviewed systemd version")
 
 
 def fail(message: str) -> None:
@@ -82,31 +86,6 @@ def stable_read(path: Path, limit: int) -> bytes:
     if len(data) > limit:
         fail(f"{path} exceeds its size limit")
     return bytes(data)
-
-
-def read_expected_version(source: Path) -> str:
-    relative = Path("mkosi.resources") / "systemd-version"
-    candidates = (
-        source / relative,
-        source
-        / "usr"
-        / "src"
-        / "packages"
-        / "SOURCES"
-        / "particleos-containerhost"
-        / relative,
-    )
-    matches = [path for path in candidates if path.exists() or path.is_symlink()]
-    if len(matches) != 1:
-        fail(f"expected one reviewed systemd version file, found {len(matches)}")
-    path = matches[0]
-    try:
-        value = stable_read(path, 256).decode("ascii").strip()
-    except UnicodeDecodeError:
-        fail(f"{path} is not ASCII")
-    if VERSION.fullmatch(value) is None:
-        fail(f"{path} contains an invalid package version")
-    return value
 
 
 def select_manifest(output: Path) -> Path:
@@ -208,15 +187,16 @@ def validate(document: object, expected_version: str, manifest_name: str) -> Non
 
 
 def main() -> None:
-    source = Path(os.environ.get("SRCDIR", Path(__file__).resolve().parents[1]))
     output_value = os.environ.get("OUTPUTDIR")
     if output_value is None:
         fail("OUTPUTDIR is unset")
     output = Path(output_value)
-    expected_version = read_expected_version(source)
     manifest = select_manifest(output)
-    validate(read_manifest(manifest), expected_version, manifest.name)
-    print(f"Exact systemd package manifest {expected_version} passed: {manifest.name}")
+    validate(read_manifest(manifest), EXPECTED_SYSTEMD_VERSION, manifest.name)
+    print(
+        f"Exact systemd package manifest {EXPECTED_SYSTEMD_VERSION} passed: "
+        f"{manifest.name}"
+    )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,7 +18,14 @@ sys.dont_write_bytecode = True
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 HELPER = REPOSITORY / "mkosi.scripts" / "validate-systemd-manifest"
-EXPECTED_VERSION = (REPOSITORY / "mkosi.resources" / "systemd-version").read_text().strip()
+EXPECTED_VERSION_MATCH = re.search(
+    r'^EXPECTED_SYSTEMD_VERSION = "([0-9A-Za-z.+~^-]+)"$',
+    HELPER.read_text(),
+    re.MULTILINE,
+)
+if EXPECTED_VERSION_MATCH is None:
+    raise RuntimeError("cannot read the reviewed systemd version from the validator")
+EXPECTED_VERSION = EXPECTED_VERSION_MATCH.group(1)
 SYSTEMD_PACKAGES = {
     "systemd",
     "systemd-boot",
@@ -56,15 +64,9 @@ def good_manifest() -> dict[str, object]:
     }
 
 
-def run_case(root: Path, case: str, mutate, accepted: bool, nested_source: bool = False) -> None:
-    source = root / f"{case}-source"
+def run_case(root: Path, case: str, mutate, accepted: bool) -> None:
     output = root / f"{case}-output"
-    repository = source
-    if nested_source:
-        repository /= "usr/src/packages/SOURCES/particleos-containerhost"
-    (repository / "mkosi.resources").mkdir(parents=True)
     output.mkdir()
-    (repository / "mkosi.resources" / "systemd-version").write_text(EXPECTED_VERSION + "\n")
     document = good_manifest()
     path = output / "ParticleOS-Host_44.86.1_x86-64.manifest.gz"
     mutate(document, path)
@@ -72,7 +74,8 @@ def run_case(root: Path, case: str, mutate, accepted: bool, nested_source: bool 
         with gzip.open(path, "wt", encoding="utf-8") as stream:
             json.dump(document, stream)
     environment = os.environ.copy()
-    environment.update({"SRCDIR": str(source), "OUTPUTDIR": str(output)})
+    environment.update({"OUTPUTDIR": str(output)})
+    environment.pop("PARTICLEOS_OBS_SOURCES", None)
     result = subprocess.run(
         [sys.executable, str(HELPER)],
         env=environment,
@@ -140,7 +143,6 @@ def main() -> None:
         root = Path(temporary)
         for case, mutate, accepted in cases:
             run_case(root, case, mutate, accepted)
-        run_case(root, "obs-source-layout", lambda document, path: None, True, True)
 
     print("exact systemd manifest policy tests passed")
 

@@ -114,8 +114,7 @@ if grep -qE '^\.pcr(sig|pkey):' <<<"$uki_details"; then
     echo 'UKI unexpectedly contains a TPM-incompatible public-key PCR policy' >&2
     exit 1
 fi
-SRCDIR="$repository" OUTPUTDIR="$directory" \
-    "$repository/mkosi.scripts/validate-systemd-manifest"
+OUTPUTDIR="$directory" "$repository/mkosi.scripts/validate-systemd-manifest"
 objcopy --dump-section ".initrd=$scratch/initrd" "$uki" "$scratch/uki.copy"
 lsinitrd "$scratch/initrd" >"$scratch/initrd.list"
 grep -qE ' etc/ipe/ipe-policy\.p7b$' "$scratch/initrd.list"

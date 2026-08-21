@@ -293,7 +293,7 @@ require_fixed 'DNSOverTLS=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-pa
 require_fixed 'DNSSEC=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-particleos-dns.conf 'DNSSEC is enabled'
 require_fixed 'baseurl=https://download.opensuse.org/repositories/system:/systemd:/stable/Fedora_44/' mkosi.profiles/obs-repos/systemd.repo 'systemd comes from the upstream stable OBS project'
 require_fixed 'repo_gpgcheck=1' mkosi.profiles/obs-repos/systemd.repo 'local systemd repository metadata is authenticated'
-require_fixed '261.2+5+gb40ecf731-57.14' mkosi.resources/systemd-version 'the reviewed systemd build is exact'
+require_fixed 'EXPECTED_SYSTEMD_VERSION = "261.2+5+gb40ecf731-57.14"' mkosi.scripts/validate-systemd-manifest 'the reviewed systemd build is exact'
 reject_fixed 'rpm -q --qf' mkosi.postinst.chroot 'the minimal image does not need the RPM CLI for build validation'
 require_fixed 'PostOutputScripts=%D/mkosi.scripts/validate-systemd-manifest' mkosi.conf 'local builds enforce the exact systemd package manifest'
 require_fixed 'PostOutputScripts=%D/mkosi.scripts/validate-systemd-manifest' mkosi.obs.conf 'OBS publication enforces the exact systemd package manifest'
@@ -301,7 +301,7 @@ require_fixed 'EXPECTED_SYSTEMD_PACKAGES' mkosi.scripts/validate-systemd-manifes
 require_fixed 'systemd package set differs' mkosi.scripts/validate-systemd-manifest 'unexpected systemd subpackages fail closed'
 # Literal implementation string, not an expression for this validator.
 # shellcheck disable=SC2016
-require_fixed 'SRCDIR="$repository" OUTPUTDIR="$directory"' scripts/validate-artifacts.sh 'downloaded releases revalidate the exact systemd package manifest'
+require_fixed 'OUTPUTDIR="$directory" "$repository/mkosi.scripts/validate-systemd-manifest"' scripts/validate-artifacts.sh 'downloaded releases revalidate the exact systemd package manifest'
 require_fixed '0B2264A151F114677B1D0AAF25688B9E8208EED3' mkosi.postinst.chroot 'the runtime update key has one pinned primary fingerprint'
 reject_fixed 'packages built from upstream main' mkosi.profiles/obs-repos/systemd.repo 'the image no longer consumes moving systemd main'
 require_fixed '        binutils' mkosi.conf 'objcopy is present for runtime UKI identity verification'
