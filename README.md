@@ -76,7 +76,7 @@ Workload trust | Defined by the selected image | Exact default-deny OCI policy w
 Mandatory access control | Distribution SELinux and signed image integrity | Enforcing host policy with separate `container_runtime_t` and `gvisor_t` domains
 IPE | Signed IPE-capable boot profile | Signed container-host policy that protects kernel-fed objects while delegating systrap execution control to dm-verity, `noexec` state, and SELinux
 Networking | Distribution network defaults | Default-drop policy with exact bridge, address, protocol, and port tuples; workload DNS blocked
-Update activation | systemd-sysupdate workflow | Automatic reboot only after exact candidate PCR authorization; administrator-optional workload health on counted candidates
+Update activation | systemd-sysupdate workflow | Automatic reboot only after exact candidate PCR authorization; optional workload health receives three counted attempts before fallback
 Release qualification | mkosi image build | Repository and OBS publication gates, hostile archive checks, artifact authentication, and Secure Boot/TPM/container VM tests
 
 ## Architecture
@@ -123,6 +123,8 @@ Readiness | systemd and Quadlet health gate | Container `HealthCmd=` result
 - Fedora 44 on x86-64, built with current mkosi, upstream-stable systemd, and
   the upstream ParticleOS layout.
 - Signed systemd-boot and UKI with UEFI Secure Boot enforcement.
+- Explicitly enabled systemd-boot menu access to UEFI firmware setup on
+  supported VM firmware.
 - Read-only EROFS `/usr`, signed dm-verity, and two complete A/B slots.
 - Atomic systemd-sysupdate transfers for the UKI, `/usr`, verity data, and
   verity signature.
@@ -259,11 +261,11 @@ systemctl enable particleos-workload-health.service
 
 The service becomes a direct requirement of `systemd-bless-boot.service` only
 after that opt-in and runs only when systemd-boot marks the selected deployment
-as counted. On a failed probe, the gate marks that candidate bad while its
-authoritative boot-count path is still available, then reboots directly into
-the uncounted working slot. The fallback skips the workload gate, so one broken
-application cannot reboot both A/B deployments forever. Disable the service to
-return to host-only blessing.
+as counted. A failed probe leaves the candidate unblessed and reboots, consuming
+one of its three configured attempts. Only after all three attempts fail does
+systemd-boot select the uncounted working slot. The fallback skips the workload
+gate, so one broken application cannot reboot both A/B deployments forever.
+Disable the service to return to host-only blessing.
 
 ## Disk and Update Model
 
@@ -418,6 +420,13 @@ systemd first-boot flow asks, in order:
 3. an administrator username; and
 4. that administrator's password.
 
+These prompts are pinned to the VM's primary VGA terminal and remain directly
+visible in the main GTK or hypervisor console across the enrollment reboot. The
+visible test runner reads that framebuffer with OCR and types through the VGA
+keyboard path instead of redirecting setup to serial. The systemd-boot menu
+also exposes **Reboot Into Firmware Interface** when the VM firmware advertises
+setup support.
+
 After the timezone is written, the machine automatically reboots once to stage
 and prove its PCR 7+11 state-unlock policy. The username and password prompts
 continue after that enrollment reboot. The administrator is stored by
@@ -464,9 +473,9 @@ Every transfer uses `Verify=yes`. The update unit stays active until every
 transfer commits, then validates the exact candidate UKI and commits the
 two-UKI PCR policy before recording reboot readiness. The rebooted candidate
 must satisfy host health and, when the administrator has enabled it, Quadlet
-health before blessing. A failed workload probe marks only that counted
-candidate bad before reboot; the uncounted fallback remains bootable. Blessing
-either slot prunes the other UKI from state-unlock authorization.
+health before blessing. Each failed workload probe consumes one counted
+attempt; after three failures systemd-boot selects the uncounted fallback.
+Blessing either slot prunes the other UKI from state-unlock authorization.
 
 ## Diagnostics and Tests
 
@@ -559,7 +568,7 @@ unlock and repeats the signed-container path. Every guest and TPM emulator
 stops after success or failure. A successful audit boot prints:
 
 ```text
-PARTICLEOS_VM_AUDIT_PASS checks=105
+PARTICLEOS_VM_AUDIT_PASS checks=106
 ```
 
 Set `VM_AUDIT_KEEP_FAILED=1` to retain a failed guest disk and serial logs for
@@ -584,9 +593,10 @@ cannot enter the PCR policy, verifies the exact two-UKI policy, boots and
 blesses the candidate, confirms pruning to one UKI measurement, and then
 forces the superseded signed entry. That entry must reach the initrd emergency
 path before persistent state is unlocked. The second scenario repeats the
-update on clean state, injects a health failure on every counted attempt, and
-requires systemd-boot to return to the uncounted base version without running
-the workload gate there.
+update on clean state, injects a health failure on each of three counted
+attempts, verifies the `+2-1`, `+1-2`, and `+0-3` UKI states, and requires
+systemd-boot to return to the uncounted base version without running the
+workload gate there.
 
 Set `VM_UPDATE_AUDIT_KEEP_FAILED=1` to retain disks and serial logs after a
 failure. The runner stops every QEMU and swtpm process in both scenarios.

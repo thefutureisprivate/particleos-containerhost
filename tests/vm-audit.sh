@@ -43,6 +43,13 @@ if [[ $boot_path == /efi ]] && systemctl is-active --quiet efi.mount &&
 else
     fail 'the mandatory EFI mount unit owns the boot-manager path'
 fi
+if [[ -f $boot_path/loader/loader.conf ]] &&
+        grep -qE '^[[:space:]]*auto-firmware[[:space:]]+yes([[:space:]]|$)' \
+            "$boot_path/loader/loader.conf"; then
+    pass 'systemd-boot explicitly enables the reboot-into-firmware menu entry'
+else
+    fail 'systemd-boot explicitly enables the reboot-into-firmware menu entry'
+fi
 if systemctl is-active --quiet particleos-esp-module.service &&
         grep -qE '^vfat ' /proc/modules; then
     pass 'the signed vfat module loaded before the EFI mount'
@@ -218,10 +225,12 @@ if [[ $(systemctl is-enabled particleos-workload-health.service 2>/dev/null) == 
         ! systemctl show -p Requires --value systemd-bless-boot.service |
             grep -qw particleos-workload-health.service &&
         systemctl cat particleos-workload-health.service |
-            grep -qF 'ConditionPathExists=/sys/firmware/efi/efivars/LoaderBootCountPath-'; then
-    pass 'workload health is opt-in and can reject only counted candidates'
+            grep -qF 'ConditionPathExists=/sys/firmware/efi/efivars/LoaderBootCountPath-' &&
+        grep -qF 'TriesLeft=3' /usr/lib/sysupdate.d/20-particleos-kernel.transfer &&
+        ! grep -qF 'systemd-bless-boot bad' /usr/lib/particleos/workload-health-gate; then
+    pass 'workload health is opt-in and preserves all three counted candidate attempts'
 else
-    fail 'workload health is opt-in and can reject only counted candidates'
+    fail 'workload health is opt-in and preserves all three counted candidate attempts'
 fi
 
 if [[ -z $(systemctl --failed --no-legend --plain) ]]; then

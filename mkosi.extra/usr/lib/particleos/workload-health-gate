@@ -13,14 +13,9 @@ if ((probe_status == 0)); then
     exit 0
 fi
 
-# Do not rely on all remaining retry boots seeing LoaderBootCountPath. Mark
-# this counted candidate bad while the current boot still has the authoritative
-# EFI path, then let the unit's FailureAction reboot into the known-good slot.
-if ! /usr/lib/systemd/systemd-bless-boot bad; then
-    echo 'failed to mark the unhealthy counted candidate bad' >&2
-    exit "$probe_status"
-fi
-
+# Leave the candidate unblessed and let systemd-boot consume exactly one of
+# the three configured attempts on each reboot. The unit runs only on counted
+# candidates, so the uncounted known-good fallback never enters this loop.
 sync
-echo "PARTICLEOS_WORKLOAD_CANDIDATE_REJECTED status=$probe_status" >&2
+echo "PARTICLEOS_WORKLOAD_CANDIDATE_FAILED status=$probe_status" >&2
 exit "$probe_status"

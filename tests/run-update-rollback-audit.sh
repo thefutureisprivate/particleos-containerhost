@@ -195,6 +195,16 @@ extract_usrhash() {
     grep -m1 -oE 'usrhash=[0-9a-f]{64}' "$log" | cut -d= -f2
 }
 
+assert_counted_health_attempt() {
+    local boot_number=$1 tries_left=$2 tries_done=$3 log
+    log=$active_state/boot-$boot_number.log
+    grep 'UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT ' "$log"
+    grep 'PARTICLEOS_WORKLOAD_CANDIDATE_FAILED ' "$log"
+    grep -qF "ParticleOS-Host_${candidate_version}_x86-64+${tries_left}-${tries_done}.efi" "$log"
+    [[ $(extract_usrhash "$log") != "$fallback_base_usrhash" ]]
+    echo "UPDATE_ROLLBACK_AUDIT_HEALTH_ATTEMPT attempt=$tries_done tries_left=$tries_left version=$candidate_version"
+}
+
 run_guest() {
     local scenario=$1 boot_number=$2 expectation=$3
     local log=$active_state/boot-$boot_number.log
@@ -323,12 +333,14 @@ run_guest health-fallback 1 clean
 grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 fallback_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
 run_guest health-fallback 2 clean
-grep 'UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT ' "$active_state/boot-2.log"
-grep 'PARTICLEOS_WORKLOAD_CANDIDATE_REJECTED ' "$active_state/boot-2.log"
-[[ $(extract_usrhash "$active_state/boot-2.log") != "$fallback_base_usrhash" ]]
+assert_counted_health_attempt 2 2 1
 run_guest health-fallback 3 clean
-grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-3.log"
-grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_CONFIRMED ' "$active_state/boot-3.log"
-[[ $(extract_usrhash "$active_state/boot-3.log") == "$fallback_base_usrhash" ]]
+assert_counted_health_attempt 3 1 2
+run_guest health-fallback 4 clean
+assert_counted_health_attempt 4 0 3
+run_guest health-fallback 5 clean
+grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-5.log"
+grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_CONFIRMED ' "$active_state/boot-5.log"
+[[ $(extract_usrhash "$active_state/boot-5.log") == "$fallback_base_usrhash" ]]
 
-echo 'ParticleOS A/B update, health fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'
+echo 'ParticleOS A/B update, three-attempt health fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'

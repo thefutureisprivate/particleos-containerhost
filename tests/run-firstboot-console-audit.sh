@@ -25,8 +25,8 @@ vm_display=${FIRSTBOOT_VM_DISPLAY:-gtk}
     exit 2
 }
 [[ -r /dev/kvm && -w /dev/kvm ]] || { echo '/dev/kvm is unavailable' >&2; exit 1; }
-for command in base64 cp find mktemp pgrep pkill python3 qemu-system-x86_64 \
-        realpath swtpm tail tr truncate zstd; do
+for command in base64 cp env find mktemp pgrep pkill python3 qemu-system-x86_64 \
+        realpath swtpm tail tesseract tr truncate zstd; do
     command -v "$command" >/dev/null || {
         echo "missing required command: $command" >&2
         exit 1
@@ -102,12 +102,13 @@ ovmf_vars=$scratch/ovmf-vars.bin
 tpm_state=$scratch/tpm
 tpm_socket=$scratch/tpm.sock
 log=$scratch/firstboot.log
+qmp_socket=$scratch/qmp.sock
+vga_screenshot=$scratch/firstboot-vga.ppm
 mkdir -m 0700 "$tpm_state"
 cp --reflink=auto --sparse=always "$ovmf_vars_source" "$ovmf_vars"
 zstd --sparse -q -d -f -o "$disk" "${compressed_images[0]}"
 truncate -s 16G "$disk"
 
-firstboot_serial=$(base64 -w0 "$repository/tests/firstboot-serial.conf")
 audit_service=$(base64 -w0 "$repository/tests/firstboot-console-audit.conf")
 audit_script=$(base64 -w0 "$repository/tests/firstboot-console-audit")
 audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
@@ -122,7 +123,10 @@ swtpm socket \
     --terminate
 
 qemu_active=1
-if ! "$repository/tests/firstboot-console-expect.py" "$log" -- \
+if ! env \
+        FIRSTBOOT_QMP_SOCKET="$qmp_socket" \
+        FIRSTBOOT_VGA_SCREENSHOT="$vga_screenshot" \
+        "$repository/tests/firstboot-console-expect.py" "$log" -- \
         qemu-system-x86_64 \
         -name "particleos-firstboot-console-audit-$$" \
         -machine q35,smm=on,accel=kvm \
@@ -140,10 +144,9 @@ if ! "$repository/tests/firstboot-console-expect.py" "$log" -- \
         -device virtio-net-pci,netdev=net0 \
         -display "$vm_display" \
         -serial stdio \
+        -qmp "unix:$qmp_socket,server=on,wait=off" \
         -monitor none \
         -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-firstboot.service~90-particleos-serial=$firstboot_serial" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-serial=$firstboot_serial" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-firstboot-audit=$audit_service" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate" \
         -smbios "type=11,value=io.systemd.credential.binary:firstboot-console-audit=$audit_script"; then
@@ -157,4 +160,4 @@ qemu_active=0
 stop_tpm
 
 grep 'PARTICLEOS_FIRSTBOOT_CONSOLE_PASS ' "$log"
-echo 'ParticleOS native root/timezone/homed provisioning and authenticated run0 audit passed; guest and TPM emulator are stopped.'
+echo 'ParticleOS systemd-boot firmware entry, native VGA provisioning, and authenticated run0 audit passed; guest and TPM emulator are stopped.'

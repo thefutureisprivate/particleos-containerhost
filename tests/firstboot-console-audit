@@ -3,7 +3,7 @@
 set -euo pipefail
 
 readonly username=particleadmin
-readonly password='ParticleOS-Test-Run0-261!'
+readonly password='VgaAdmin261Secure'
 readonly run0_audit=/run/particleos-firstboot-run0-audit
 
 fail() {
