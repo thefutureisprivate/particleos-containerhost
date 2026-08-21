@@ -171,10 +171,37 @@ luks_metadata=$(cryptsetup luksDump --dump-json-metadata "$state" 2>/dev/null ||
 luks_metadata_compact=$(tr -d '[:space:]' <<<"$luks_metadata")
 if grep -qF '"tpm2_pcrlock":true' <<<"$luks_metadata_compact" &&
         ! grep -qF '"tpm2-pcrs":[7]' <<<"$luks_metadata_compact" &&
-        [[ ! -e /var/lib/particleos/pcrlock-enrollment-pending ]]; then
+        [[ ! -e /var/lib/particleos/pcrlock-enrollment-pending &&
+           -s /var/lib/particleos/pcrlock-volume-key-rotated ]]; then
     pass 'a later boot proved PCR7+11 before the PCR7 bootstrap token was retired'
 else
     fail 'a later boot proved PCR7+11 before the PCR7 bootstrap token was retired'
+fi
+rotation_receipt=/var/lib/particleos/pcrlock-volume-key-rotated
+enrollment_receipt=/var/lib/particleos/pcrlock-enrolled
+rotation_label='' rotation_boot='' rotation_token_label='' rotation_token='' rotation_extra=''
+enrollment_label='' enrollment_token_label='' enrollment_token=''
+enrollment_rotation_label='' enrollment_rotation_boot='' enrollment_extra=''
+if [[ -s $rotation_receipt && -s $enrollment_receipt ]] &&
+        read -r rotation_label rotation_boot rotation_token_label rotation_token \
+            rotation_extra <"$rotation_receipt" &&
+        read -r enrollment_label enrollment_token_label enrollment_token \
+            enrollment_rotation_label enrollment_rotation_boot enrollment_extra \
+            <"$enrollment_receipt" &&
+        [[ $rotation_label == pcrlock-volume-key-rotated &&
+           $rotation_boot =~ ^[0-9a-f-]{36}$ &&
+           $rotation_token_label == token-id &&
+           $rotation_token =~ ^[0-9]+$ &&
+           -z $rotation_extra &&
+           $enrollment_label == pcrlock-enrolled &&
+           $enrollment_token_label == token-id &&
+           $enrollment_token == "$rotation_token" &&
+           $enrollment_rotation_label == volume-key-rotated-boot &&
+           $enrollment_rotation_boot =~ ^[0-9a-f-]{36}$ &&
+           -z $enrollment_extra ]]; then
+    pass 'volume-key rotation and enrollment receipts are exact and consistent'
+else
+    fail 'volume-key rotation and enrollment receipts are exact and consistent'
 fi
 if grep -Eq '"pcr"[[:space:]]*:[[:space:]]*7([,}])' /var/lib/systemd/pcrlock.json &&
         grep -Eq '"pcr"[[:space:]]*:[[:space:]]*11([,}])' /var/lib/systemd/pcrlock.json &&

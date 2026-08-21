@@ -300,9 +300,12 @@ first boot can create the machine-local policy. The enrollment service predicts
 the current UKI in systemd-pcrlock's 650 kernel component slot, combines PCR 7
 and PCR 11, and adds the new token while retaining the PCR 7 bootstrap. It then
 reboots. On the next boot it explicitly unlock-tests that exact pcrlock token,
-then performs token-only LUKS2 re-encryption to rotate the effective volume key
-and retain only the proved PCR policy. A bootstrap-era header then wraps an
-obsolete key. The 650 placement precedes the `750-enter-initrd` barrier at
+then performs token-only LUKS2 re-encryption to rotate the effective volume key,
+records that transition durably in encrypted state, and explicitly wipes only
+the obsolete PCR 7 key slot while retaining the proved PCR policy. The receipt
+also makes an interrupted post-reencryption finalization resumable. A
+bootstrap-era header then wraps an obsolete key. The 650 placement precedes the
+`750-enter-initrd` barrier at
 which state is unlocked.
 
 The update wrapper gets the exact newer version from systemd-sysupdate's signed

@@ -6,24 +6,48 @@ state=/dev/disk/by-partlabel/ParticleOS-Host-root
 state_directory=/var/lib/particleos
 marker=$state_directory/pcrlock-enrolled
 pending=$state_directory/pcrlock-enrollment-pending
+rotated=$state_directory/pcrlock-volume-key-rotated
 [[ -b $state && ! -e $marker ]]
 install -d -m 0700 "$state_directory"
 
-declare -a pcrlock_tokens=() bootstrap_tokens=()
+declare -a pcrlock_tokens=() pcrlock_keyslots=()
+declare -a bootstrap_tokens=() bootstrap_keyslots=()
 scan_tokens() {
-    local id token compact
+    local id token compact keyslot
     pcrlock_tokens=()
+    pcrlock_keyslots=()
     bootstrap_tokens=()
+    bootstrap_keyslots=()
     for id in {0..31}; do
         token=$(cryptsetup token export --token-id "$id" "$state" 2>/dev/null) || continue
         compact=${token//[[:space:]]/}
         [[ $compact == *'"type":"systemd-tpm2"'* ]] || continue
+        [[ $compact =~ \"keyslots\":\[\"([0-9]+)\"\] ]] || {
+            echo "TPM2 token $id does not reference exactly one numeric key slot" >&2
+            return 1
+        }
+        keyslot=${BASH_REMATCH[1]}
         if [[ $compact == *'"tpm2_pcrlock":true'* ]]; then
             pcrlock_tokens+=("$id")
+            pcrlock_keyslots+=("$keyslot")
         elif [[ $compact == *'"tpm2-pcrs":[7]'* ]]; then
             bootstrap_tokens+=("$id")
+            bootstrap_keyslots+=("$keyslot")
         fi
     done
+}
+
+write_state_file() {
+    local destination=$1 temporary
+    shift
+    temporary=$(mktemp "$state_directory/.${destination##*/}.XXXXXXXX")
+    chmod 0600 "$temporary"
+    if ! printf '%s\n' "$*" >"$temporary" ||
+            ! sync -f "$temporary" || ! mv -- "$temporary" "$destination" ||
+            ! sync -f "$state_directory"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
 }
 
 enroll_pcrlock() {
@@ -35,7 +59,27 @@ enroll_pcrlock() {
         "$state"
 }
 
+if [[ ! -e $pending && -e $rotated ]]; then
+    read -r rotated_label rotated_boot token_label token_id extra <"$rotated"
+    [[ $rotated_label == pcrlock-volume-key-rotated &&
+       $rotated_boot =~ ^[0-9a-f-]{36}$ &&
+       $token_label == token-id &&
+       $token_id =~ ^[0-9]+$ &&
+       -z ${extra:-} ]]
+    scan_tokens
+    [[ ${#pcrlock_tokens[@]} -eq 1 &&
+       ${pcrlock_tokens[0]} == "$token_id" &&
+       ${#bootstrap_tokens[@]} -eq 0 ]]
+    cryptsetup open --type luks2 --test-passphrase --token-only \
+        --token-id "$token_id" "$state"
+    write_state_file "$marker" \
+        "pcrlock-enrolled token-id $token_id volume-key-rotated-boot $rotated_boot"
+    echo "PARTICLEOS_PCRLOCK_FINALIZATION_RECOVERED token=$token_id rotated_boot=$rotated_boot"
+    exit 0
+fi
+
 if [[ ! -e $pending ]]; then
+    [[ ! -e $rotated ]]
     /usr/lib/particleos/pcrlock-refresh current
     scan_tokens
     [[ ${#bootstrap_tokens[@]} -ge 1 ]]
@@ -45,9 +89,8 @@ if [[ ! -e $pending ]]; then
     fi
     [[ ${#pcrlock_tokens[@]} -ge 1 && ${#bootstrap_tokens[@]} -ge 1 ]]
     read -r boot_id </proc/sys/kernel/random/boot_id
-    printf 'pcrlock-bootstrap-pending %s token-id %s\n' \
-        "$boot_id" "${pcrlock_tokens[0]}" >"$pending"
-    chmod 0600 "$pending"
+    write_state_file "$pending" \
+        "pcrlock-bootstrap-pending $boot_id token-id ${pcrlock_tokens[0]}"
     echo "PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED boot=$boot_id token=${pcrlock_tokens[0]}"
 
     # Queue the reboot before completing this oneshot. The manager accepts the
@@ -81,11 +124,40 @@ echo "PARTICLEOS_PCRLOCK_NEXT_BOOT_PROVED boot=$current_boot token=$token_id"
 # state. Rotate the effective volume key while authorizing the operation only
 # through that token. A saved bootstrap-era LUKS2 header then wraps an obsolete
 # volume key and cannot decrypt the re-encrypted payload.
-/usr/sbin/cryptsetup reencrypt --batch-mode --token-only \
-    --token-id "$token_id" "$state"
+if [[ ! -e $rotated ]]; then
+    /usr/sbin/cryptsetup reencrypt --batch-mode --token-only \
+        --token-id "$token_id" "$state"
+    write_state_file "$rotated" \
+        "pcrlock-volume-key-rotated $current_boot token-id $token_id"
+else
+    read -r rotated_label rotated_boot token_label rotated_token extra <"$rotated"
+    [[ $rotated_label == pcrlock-volume-key-rotated &&
+       $rotated_boot =~ ^[0-9a-f-]{36}$ &&
+       $token_label == token-id &&
+       $rotated_token == "$token_id" &&
+       -z ${extra:-} ]]
+fi
+
+# cryptsetup reencrypt retains old enrollment tokens even though their saved
+# headers wrap the now-obsolete volume key. Prove the replacement again, then
+# wipe only the numeric key slots referenced by PCR7 bootstrap tokens.
 scan_tokens
-[[ ${#pcrlock_tokens[@]} -eq 1 && ${#bootstrap_tokens[@]} -eq 0 ]]
+[[ ${#pcrlock_tokens[@]} -eq 1 &&
+   ${pcrlock_tokens[0]} == "$token_id" ]]
 /usr/sbin/cryptsetup open --type luks2 --test-passphrase --token-only \
-    --token-id "${pcrlock_tokens[0]}" "$state"
-install -m 0600 /dev/null "$marker"
+    --token-id "$token_id" "$state"
+for bootstrap_keyslot in "${bootstrap_keyslots[@]}"; do
+    [[ $bootstrap_keyslot != "${pcrlock_keyslots[0]}" ]]
+    /usr/bin/systemd-cryptenroll --wipe-slot="$bootstrap_keyslot" "$state"
+done
+scan_tokens
+[[ ${#pcrlock_tokens[@]} -eq 1 &&
+   ${pcrlock_tokens[0]} == "$token_id" &&
+   ${#bootstrap_tokens[@]} -eq 0 ]]
+/usr/sbin/cryptsetup open --type luks2 --test-passphrase --token-only \
+    --token-id "$token_id" "$state"
 rm -f -- "$pending"
+sync -f "$state_directory"
+write_state_file "$marker" \
+    "pcrlock-enrolled token-id $token_id volume-key-rotated-boot $current_boot"
+echo "PARTICLEOS_PCRLOCK_BOOTSTRAP_RETIRED boot=$current_boot token=$token_id"
