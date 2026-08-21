@@ -312,6 +312,8 @@ require_fixed 'Options=umask=0077,nodev,nosuid,noexec' mkosi.extra/usr/lib/syste
 require_fixed 'Requires=particleos-esp-module.service' mkosi.extra/usr/lib/systemd/system/efi.mount 'the ESP mount requires its early signed filesystem module'
 require_fixed 'DefaultDependencies=no' mkosi.extra/usr/lib/systemd/system/particleos-esp-module.service 'the ESP filesystem module can load before local filesystems'
 require_fixed 'ExecStart=/usr/sbin/modprobe -- vfat' mkosi.extra/usr/lib/systemd/system/particleos-esp-module.service 'the early module loader is limited to vfat'
+require_fixed 'PrivateTmp=no' mkosi.extra/usr/lib/systemd/system/particleos-esp-module.service 'the early ESP module loader does not acquire the tmpfiles local-fs dependency'
+reject_fixed 'PrivateTmp=yes' mkosi.extra/usr/lib/systemd/system/particleos-esp-module.service 'the early ESP module loader cannot create a local-fs ordering cycle'
 if grep -qxF 'vfat' mkosi.extra/usr/lib/particleos/modules.conf; then
     fail 'the early ESP module is absent from the later container module list'
 else
