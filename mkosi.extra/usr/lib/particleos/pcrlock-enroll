@@ -51,13 +51,13 @@ if [[ ! -e $pending ]]; then
     chmod 0600 "$pending"
     echo "PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED boot=$boot_id token=${pcrlock_tokens[0]}"
 
-    # Keep the required boot-complete dependency active until shutdown has
-    # started. The next boot must prove the exact PCR 7+11 token before any
-    # TPM2 enrollment is removed.
+    # Queue the reboot before completing this oneshot. The manager accepts the
+    # reboot transaction synchronously; returning then lets the start job
+    # finish so its shutdown stop job cannot deadlock behind ExecStart. The
+    # next boot must prove the exact PCR 7+11 token before any TPM2 enrollment
+    # is removed.
     systemctl --no-block reboot
-    while :; do
-        sleep 1h
-    done
+    exit 0
 fi
 
 read -r pending_label previous_boot token_label token_id extra <"$pending"

@@ -92,6 +92,8 @@ require_fixed 'cryptsetup open --type luks2 --test-passphrase --token-only' mkos
 require_fixed '--wipe-slot=tpm2' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'proved TPM enrollments are replaced atomically'
 # shellcheck disable=SC2016
 require_fixed '[[ $current_boot != "$previous_boot" ]]' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap removal requires a different boot ID'
+require_fixed 'systemctl --no-block reboot' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap migration queues the proof reboot'
+reject_fixed 'while :' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'the enrollment start job cannot deadlock its queued reboot'
 require_fixed 'ExecStart=/usr/lib/particleos/sysupdate' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate.service.d/40-particleos-egress.conf 'the authenticated update wrapper owns PCR admission'
 require_fixed 'Type=oneshot' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate.service.d/40-particleos-egress.conf 'PCR authorization waits for every update transfer to commit'
 require_fixed 'TimeoutStartSec=infinity' mkosi.extra/usr/lib/systemd/system/systemd-sysupdate.service.d/40-particleos-egress.conf 'large verified updates are not cut off by the oneshot start timeout'
