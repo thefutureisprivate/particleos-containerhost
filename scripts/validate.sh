@@ -423,7 +423,7 @@ require_fixed 'UPDATE_ROLLBACK_AUDIT_JSON' tests/update-rollback-audit.sh 'updat
 require_fixed 'systemctl status --no-pager --full systemd-sysupdate.service' tests/update-rollback-audit.sh 'update audit preserves the production service failure cause'
 require_fixed 'run_guest rollback-denial 0 enrollment' tests/run-update-rollback-audit.sh 'update audit preserves bootstrap through a separate enrollment boot'
 require_fixed 'PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED ' tests/run-update-rollback-audit.sh 'update audit requires the enrollment proof reboot transaction'
-require_fixed 'systemctl start systemd-sysupdate-reboot.service' tests/update-rollback-audit.sh 'update audit exercises the production automatic reboot service'
+require_fixed 'systemctl --no-block start systemd-sysupdate-reboot.service' tests/update-rollback-audit.sh 'update audit queues the production automatic reboot service without racing its own cancellation'
 reject_fixed 'sleep 30' tests/update-rollback-audit.sh 'update audit start jobs cannot deadlock production reboot actions'
 # shellcheck disable=SC2016
 require_fixed '[[ -e $ready ]]' tests/update-rollback-audit.sh 'an unhealthy unblessed candidate retains the fallback PCR policy until reboot'
