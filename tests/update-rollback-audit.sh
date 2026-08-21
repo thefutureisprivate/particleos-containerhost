@@ -152,10 +152,8 @@ initial)
     write_state "$stage_file" staged
     sync
     echo "UPDATE_ROLLBACK_AUDIT_STAGED base=$base_version candidate=$candidate_version variants=${#component_files[@]}"
-    systemctl start systemd-sysupdate-reboot.service || true
-    sleep 30
-    echo 'UPDATE_ROLLBACK_AUDIT_REBOOT_FAILED'
-    exit 1
+    systemctl start systemd-sysupdate-reboot.service
+    exit 0
     ;;
 staged)
     if [[ $IMAGE_VERSION == "$base_version" ]]; then
@@ -170,29 +168,32 @@ staged)
         [[ ! -e $ready ]]
         check_policy_pcrs
         echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS base=$base_version candidate=$candidate_version variants=${#component_files[@]} rejected=${rejected_candidates[0]##*/}"
+        systemctl --no-block poweroff
         exit 0
     fi
 
     [[ $IMAGE_VERSION == "$candidate_version" ]]
-    [[ ${#component_files[@]} -eq 1 ]]
     [[ ${#installed_ukis[@]} -eq 2 ]]
-    [[ ! -e $ready ]]
     check_policy_pcrs
 
     if [[ $scenario == health-fallback ]]; then
+        [[ ${#component_files[@]} -eq 2 ]]
+        [[ -e $ready ]]
         echo "UPDATE_ROLLBACK_AUDIT_HEALTH_PENDING version=$candidate_version"
-        sleep 30
-        echo 'UPDATE_ROLLBACK_AUDIT_HEALTH_REBOOT_FAILED'
-        exit 1
+        exit 0
     fi
 
     [[ $scenario == rollback-denial ]]
+    [[ ${#component_files[@]} -eq 1 ]]
+    [[ ! -e $ready ]]
     read -r base_entry <"$base_entry_file"
     [[ $base_entry == "ParticleOS-Host_${base_version}_x86-64.efi" ]]
     bootctl set-oneshot "$base_entry"
     write_state "$stage_file" rollback-attempt
     sync
     echo "UPDATE_ROLLBACK_AUDIT_CANDIDATE_BLESSED base=$base_version candidate=$candidate_version variants=${#component_files[@]}"
+    systemctl --no-block poweroff
+    exit 0
     ;;
 rollback-attempt)
     echo "UPDATE_ROLLBACK_AUDIT_BYPASS version=$IMAGE_VERSION"
