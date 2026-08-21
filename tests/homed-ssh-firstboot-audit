@@ -1,0 +1,29 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+readonly username=particleadmin
+readonly password='ParticleOS-Test-SSH-261!'
+readonly authorized_key="$CREDENTIALS_DIRECTORY/homed-ssh-authorized-key"
+
+if ! homectl inspect "$username" >/dev/null 2>&1; then
+    NEWPASSWORD="$password" homectl create "$username" \
+        --member-of=wheel,systemd-journal \
+        --storage=luks \
+        --fs-type=btrfs \
+        --disk-size=1G \
+        --auto-resize-mode=off \
+        --luks-discard=yes \
+        --nosuid=yes \
+        --nodev=yes \
+        --noexec=yes \
+        --enforce-password-policy=yes \
+        --ssh-authorized-keys=@"$authorized_key"
+fi
+
+cmp --silent "$authorized_key" <(userdbctl ssh-authorized-keys "$username")
+systemctl enable --now sshd.socket
+homectl deactivate "$username" >/dev/null 2>&1 || true
+homectl inspect --json=short "$username" |
+    grep -Eq '"state"[[:space:]]*:[[:space:]]*"inactive"'
+printf 'PARTICLEOS_HOMED_SSH_READY user=%s state=inactive\n' "$username"

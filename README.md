@@ -546,6 +546,21 @@ for headless automation. A successful run prints:
 PARTICLEOS_FIRSTBOOT_CONSOLE_PASS user=particleadmin timezone=Etc/UTC run0=authenticated
 ```
 
+Test a cold, password-encrypted homed account through the complete interactive
+SSH path with:
+
+```console
+./tests/run-homed-ssh-audit.sh \
+  /path/to/artifacts \
+  /path/to/enrolled-ovmf-vars.bin
+```
+
+The audit generates a disposable Ed25519 key, proves systemd-userdb exposes it
+while the home is inactive, disables every SSH password mechanism, answers the
+separate `systemd-home-fallback-shell` unlock prompt, enters the mounted home,
+and rejects SELinux denials from the SSH, userdb, or homed path. Its GTK VM is
+visible by default and is stopped automatically after the result is known.
+
 Then run the complete local VM audit:
 
 ```console
