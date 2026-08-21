@@ -17,6 +17,7 @@ audit_timeout=${VM_AUDIT_TIMEOUT:-900}
 denial_timeout=${VM_AUDIT_DENIAL_TIMEOUT:-80}
 audit_tmpdir=${VM_AUDIT_TMPDIR:-$artifact_directory}
 keep_failed=${VM_AUDIT_KEEP_FAILED:-0}
+only_network_fault=${VM_AUDIT_ONLY_NETWORK_FAULT:-0}
 vm_display=${VM_AUDIT_DISPLAY:-none}
 
 [[ $audit_timeout =~ ^[1-9][0-9]*$ && $denial_timeout =~ ^[1-9][0-9]*$ ]] || {
@@ -25,6 +26,10 @@ vm_display=${VM_AUDIT_DISPLAY:-none}
 }
 [[ $keep_failed == 0 || $keep_failed == 1 ]] || {
     echo 'VM_AUDIT_KEEP_FAILED must be 0 or 1' >&2
+    exit 2
+}
+[[ $only_network_fault == 0 || $only_network_fault == 1 ]] || {
+    echo 'VM_AUDIT_ONLY_NETWORK_FAULT must be 0 or 1' >&2
     exit 2
 }
 [[ $vm_display == none || $vm_display == gtk ]] || {
@@ -138,6 +143,7 @@ homed_firstboot_audit=$(base64 -w0 "$repository/tests/homed-firstboot-audit")
 root_password=$(printf particleos | base64 -w0)
 firstboot_timezone=$(printf Etc/UTC | base64 -w0)
 nftables_failure=$(base64 -w0 "$repository/tests/nftables-failure.conf")
+network_failure_audit=$(base64 -w0 "$repository/tests/network-failure-audit.conf")
 
 run_boot() {
     local boot_number=$1
@@ -146,13 +152,41 @@ run_boot() {
     local log=$scratch/boot-$boot_number.log
     local socket=$scratch/tpm-$boot_number.sock
     local timeout_seconds=$audit_timeout status
-    local -a fault_credentials=()
+    local kernel_command_line_extra='systemd.mask=serial-getty@ttyS0.service'
+    local -a audit_credentials=() fault_credentials=()
     [[ $expectation == denied ]] && timeout_seconds=$denial_timeout
     if [[ $expectation == security-fault ]]; then
         timeout_seconds=$denial_timeout
+        # The fault assertion is independent of provisioning. Do not let a
+        # resumable native first-boot prompt consume the bounded denial window
+        # before network-pre.target reaches the deliberately failed firewall.
+        kernel_command_line_extra+=' systemd.mask=systemd-firstboot.service systemd.mask=systemd-homed-firstboot.service'
         fault_credentials=(
             -smbios
             "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.nftables.service~90-particleos-failure=$nftables_failure"
+            -smbios
+            "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service"
+            -smbios
+            "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script"
+            -smbios
+            "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate"
+            -smbios
+            "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-network-failure=$network_failure_audit"
+        )
+    else
+        audit_credentials=(
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit=$audit_service"
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate"
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit"
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~80-particleos-header-backup=$pcrlock_header_backup_dropin"
+            -smbios "type=11,value=io.systemd.credential.binary:pcrlock-header-backup=$pcrlock_header_backup"
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service"
+            -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script"
+            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit=$homed_firstboot_dropin"
+            -smbios "type=11,value=io.systemd.credential.binary:homed-firstboot-audit=$homed_firstboot_audit"
+            -smbios "type=11,value=io.systemd.credential.binary:passwd.plaintext-password.root=$root_password"
+            -smbios "type=11,value=io.systemd.credential.binary:firstboot.timezone=$firstboot_timezone"
+            -smbios "type=11,value=io.systemd.credential.binary:vm-audit=$audit_script"
         )
     fi
 
@@ -189,19 +223,8 @@ run_boot() {
             -serial "file:$log" \
             -monitor none \
             -no-reboot \
-            -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service' \
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit=$audit_service" \
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate" \
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~80-particleos-header-backup=$pcrlock_header_backup_dropin" \
-            -smbios "type=11,value=io.systemd.credential.binary:pcrlock-header-backup=$pcrlock_header_backup" \
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service" \
-            -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script" \
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit=$homed_firstboot_dropin" \
-            -smbios "type=11,value=io.systemd.credential.binary:homed-firstboot-audit=$homed_firstboot_audit" \
-            -smbios "type=11,value=io.systemd.credential.binary:passwd.plaintext-password.root=$root_password" \
-            -smbios "type=11,value=io.systemd.credential.binary:firstboot.timezone=$firstboot_timezone" \
-            -smbios "type=11,value=io.systemd.credential.binary:vm-audit=$audit_script" \
+            -smbios "type=11,value=io.systemd.stub.kernel-cmdline-extra=$kernel_command_line_extra" \
+            "${audit_credentials[@]}" \
             "${fault_credentials[@]}"
     status=$?
     set -e
@@ -216,9 +239,8 @@ run_boot() {
             return 0
         fi
     elif [[ $expectation == security-fault ]]; then
-        if ((status == 124)) &&
-                grep -Eq 'Failed to start.*nftables|nftables[.]service.*failed|Emergency Mode' "$log" &&
-                ! grep -Eq 'Started.*systemd-networkd|PARTICLEOS_VM_AUDIT_PASS' "$log"; then
+        if ((status == 0)) &&
+                ! grep -Eq 'Started.*systemd-networkd|PARTICLEOS_VM_AUDIT_PASS|PARTICLEOS_NETWORK_SECURITY_FAIL_OPEN' "$log"; then
             echo 'PARTICLEOS_NETWORK_SECURITY_FAIL_CLOSED'
             return 0
         fi
@@ -241,6 +263,13 @@ run_boot() {
     echo "VM audit boot $boot_number failed" >&2
     return 1
 }
+
+if [[ $only_network_fault == 1 ]]; then
+    echo 'Injecting an nftables startup failure on a fresh authenticated image...'
+    run_boot 1 security-fault
+    echo 'ParticleOS fail-closed network startup audit passed; the guest and TPM emulator are stopped.'
+    exit 0
+fi
 
 echo 'Staging PCR 7+11 enrollment while retaining the PCR 7 bootstrap token...'
 run_boot 1 enrollment

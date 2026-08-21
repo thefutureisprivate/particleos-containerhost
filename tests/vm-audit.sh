@@ -409,7 +409,8 @@ else
     fail 'nftables inherits Fedora home protection and network-pre ordering'
 fi
 for chain in input forward output; do
-    if nft list chain inet particleos_filter "$chain" | grep -q 'policy drop;'; then
+    chain_policy=$(nft list chain inet particleos_filter "$chain")
+    if grep -q 'policy drop;' <<<"$chain_policy"; then
         pass "nftables $chain chain is default deny"
     else
         fail "nftables $chain chain is default deny"

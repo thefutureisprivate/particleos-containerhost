@@ -644,8 +644,15 @@ require_fixed 'removing an egress tuple revokes an already-established workload 
 require_fixed 'a rootful workload cannot address the host SSH socket' tests/vm-audit.sh 'VM audit exercises host-service isolation from Podman bridges'
 require_fixed 'distributed unauthenticated connections cannot disable SSH socket activation' tests/vm-audit.sh 'VM audit exercises the unlimited socket activation trigger'
 require_fixed 'the default workload has hard cgroup memory, swap, process, and CPU ceilings' tests/vm-audit.sh 'VM audit reads the effective workload cgroup ceilings'
+require_fixed 'chain_policy=' tests/vm-audit.sh 'default-deny chain checks cannot fail nondeterministically through grep SIGPIPE'
 require_fixed 'PARTICLEOS_LUKS_HEADER_REPLAY_DENIED' tests/run-vm-audit.sh 'VM audit restores and rejects a bootstrap-era LUKS header'
 require_fixed 'PARTICLEOS_NETWORK_SECURITY_FAIL_CLOSED' tests/run-vm-audit.sh 'VM audit injects and observes a fail-closed firewall startup failure'
+require_fixed 'systemd.mask=systemd-firstboot.service systemd.mask=systemd-homed-firstboot.service' tests/run-vm-audit.sh 'the isolated firewall fault boot cannot stall on resumable provisioning prompts'
+require_fixed 'expectation == security-fault' tests/run-vm-audit.sh 'the firewall fault boot does not receive provisioning or workload-audit credentials'
+require_fixed 'VM_AUDIT_ONLY_NETWORK_FAULT' tests/run-vm-audit.sh 'the isolated firewall failure can be reproduced without unrelated lifecycle boots'
+require_fixed 'PARTICLEOS_NETWORK_SECURITY_FAIL_OPEN' tests/network-failure-audit.conf 'the firewall fault boot has an explicit fail-open canary behind the production security target'
+require_fixed "PARTICLEOS_NETWORK_SECURITY_FAIL_OPEN' \"\$log\"" tests/run-vm-audit.sh 'the firewall fault proof rejects execution of the fail-open canary'
+require_fixed 'FailureAction=poweroff-force' tests/nftables-failure.conf 'only the injected nftables failure can end the isolated fault guest successfully'
 
 service=.obs/runsc/_service
 require_fixed 'release/20260810.0/x86_64/gvisor.tar.bz2' "$service" 'gVisor release archive is pinned'
