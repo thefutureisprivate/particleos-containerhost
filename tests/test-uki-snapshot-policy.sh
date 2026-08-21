@@ -9,7 +9,9 @@ mutator_pid=
 
 cleanup() {
     rm -f -- "$temporary/mutate"
-    [[ $mutator_pid =~ ^[1-9][0-9]*$ ]] && wait "$mutator_pid" 2>/dev/null || true
+    if [[ $mutator_pid =~ ^[1-9][0-9]*$ ]]; then
+        wait "$mutator_pid" 2>/dev/null || true
+    fi
     rm -rf -- "$temporary"
 }
 trap cleanup EXIT

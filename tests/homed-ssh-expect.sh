@@ -16,7 +16,7 @@ ssh_pid=
 ssh_input_fd=
 ssh_output_fd=
 
-# shellcheck disable=SC2329 # Invoked through the EXIT trap.
+# shellcheck disable=SC2317,SC2329 # Invoked through the EXIT trap.
 cleanup() {
     local status=$?
     if [[ $ssh_pid =~ ^[1-9][0-9]*$ ]] && process_running "$ssh_pid"; then
