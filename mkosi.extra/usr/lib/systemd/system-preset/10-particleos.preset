@@ -28,6 +28,7 @@ enable systemd-sysupdate-reboot.timer
 enable systemd-bless-boot.service
 enable systemd-boot-check-no-failures.service
 enable particleos-pcrlock-enroll.service
+enable particleos-pcrlock-fallback-prune.service
 disable particleos-workload-health.service
 enable fstrim.timer
 

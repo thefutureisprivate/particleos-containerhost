@@ -1,0 +1,52 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+marker=/var/lib/particleos/pcrlock-update-ready
+policy=/var/lib/systemd/pcrlock.json
+project_certificate=/usr/lib/verity.d/_projectcert.crt
+
+[[ -s $marker && -s $policy ]]
+read -r policy_label policy_digest version_label candidate_version \
+    uki_label candidate_digest extra <"$marker"
+[[ $policy_label == pcrlock-policy-sha256 &&
+   $version_label == candidate-version &&
+   $uki_label == candidate-uki-sha256 &&
+   $policy_digest =~ ^[0-9a-f]{64}$ &&
+   $candidate_version =~ ^[0-9]+([.][0-9]+)*$ &&
+   $candidate_digest =~ ^[0-9a-f]{64}$ &&
+   -z ${extra:-} ]]
+[[ $(sha256sum -- "$policy" | cut -d ' ' -f1) == "$policy_digest" ]]
+
+# shellcheck source=/dev/null
+source /usr/lib/os-release
+[[ ${IMAGE_ID:-} == ParticleOS-Host ]]
+[[ ${IMAGE_VERSION:-} =~ ^[0-9]+([.][0-9]+)*$ ]]
+[[ $IMAGE_VERSION != "$candidate_version" ]] || exit 0
+newest=$(printf '%s\n%s\n' "$IMAGE_VERSION" "$candidate_version" | sort -V | tail -n1)
+[[ $newest == "$candidate_version" ]]
+
+boot_root=$(realpath -e -- "$(bootctl --print-boot-path)")
+uki_directory="$boot_root/EFI/Linux"
+[[ -d $uki_directory && ! -L $uki_directory ]]
+declare -a candidate_ukis=()
+while IFS= read -r -d '' candidate; do
+    candidate_ukis+=("$candidate")
+done < <(find "$uki_directory" -mindepth 1 -maxdepth 1 -type f \
+    -name "ParticleOS-Host_${candidate_version}_x86-64*.efi" -print0)
+
+# A freshly staged entry still has retries and remains authorized. Only a
+# boot-manager-rejected +0-* entry proves that this is a real fallback boot.
+if [[ ${#candidate_ukis[@]} -ne 1 ||
+      ${candidate_ukis[0]##*/} != "ParticleOS-Host_${candidate_version}_x86-64+0-"*.efi ]]; then
+    echo "ParticleOS fallback PCR pruning deferred: candidate $candidate_version is not marked bad"
+    exit 0
+fi
+
+candidate_uki=$(realpath -e -- "${candidate_ukis[0]}")
+[[ $candidate_uki == "$uki_directory/"* && -f $candidate_uki && ! -L $candidate_uki ]]
+[[ $(sha256sum -- "$candidate_uki" | cut -d ' ' -f1) == "$candidate_digest" ]]
+sbverify --cert "$project_certificate" "$candidate_uki" >/dev/null
+
+/usr/lib/particleos/pcrlock-refresh current
+echo "PARTICLEOS_PCRLOCK_FALLBACK_PRUNED base=$IMAGE_VERSION candidate=$candidate_version"

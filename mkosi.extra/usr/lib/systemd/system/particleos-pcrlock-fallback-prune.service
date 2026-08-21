@@ -1,0 +1,18 @@
+[Unit]
+Description=Revoke a rejected update after boot-manager fallback
+Documentation=https://github.com/thefutureisprivate/particleos-containerhost#updates
+ConditionSecurity=measured-uki
+ConditionPathExists=/var/lib/particleos/pcrlock-update-ready
+ConditionPathExists=!/sys/firmware/efi/efivars/LoaderBootCountPath-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+Requires=particleos-pcrlock-enroll.service
+After=local-fs.target particleos-pcrlock-enroll.service
+Before=multi-user.target
+OnFailure=emergency.target
+OnFailureJobMode=replace-irreversibly
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/particleos/pcrlock-prune-fallback
+
+[Install]
+RequiredBy=multi-user.target

@@ -96,6 +96,7 @@ latest_version=$(printf '%s\n%s\n' "$base_version" "$candidate_version" | sort -
 
 audit_service=$(base64 -w0 "$repository/tests/update-rollback-audit-getty.conf")
 audit_script=$(base64 -w0 "$repository/tests/update-rollback-audit.sh")
+prune_audit=$(base64 -w0 "$repository/tests/update-rollback-prune-audit.conf")
 audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
 pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
 boot_diagnostic_service=$(base64 -w0 "$repository/tests/boot-audit-diagnostic.conf")
@@ -240,6 +241,7 @@ run_guest() {
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-update-audit=$audit_service" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-prune.service~90-particleos-audit=$prune_audit" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service" \
         -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit=$homed_firstboot_dropin" \
@@ -326,6 +328,7 @@ grep 'PARTICLEOS_WORKLOAD_CANDIDATE_REJECTED ' "$active_state/boot-2.log"
 [[ $(extract_usrhash "$active_state/boot-2.log") != "$fallback_base_usrhash" ]]
 run_guest health-fallback 3 clean
 grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-3.log"
+grep 'PARTICLEOS_PCRLOCK_FALLBACK_PRUNED ' "$active_state/boot-3.log"
 [[ $(extract_usrhash "$active_state/boot-3.log") == "$fallback_base_usrhash" ]]
 
 echo 'ParticleOS A/B update, health fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'

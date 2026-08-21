@@ -73,6 +73,31 @@ check_ready_marker() {
     /usr/lib/particleos/pcrlock-update-ready
 }
 
+dump_blessing_state() {
+    local unit
+    echo 'UPDATE_ROLLBACK_AUDIT_BLESSING_DIAGNOSTIC_BEGIN' >&2
+    printf '%s\n' '--- PCR-lock variants ---' >&2
+    find "$component" -mindepth 1 -maxdepth 1 -printf '%f %y\n' | sort >&2 || true
+    printf '%s\n' '--- readiness marker ---' >&2
+    if [[ -e $ready ]]; then
+        stat --format='%n mode=%a type=%F' "$ready" >&2 || true
+        sed -n '1p' "$ready" >&2 || true
+    else
+        echo 'absent' >&2
+    fi
+    for unit in systemd-bless-boot.service particleos-pcrlock-prune.service \
+            boot-complete.target; do
+        printf '%s\n' "--- $unit ---" >&2
+        systemctl show "$unit" \
+            -p ActiveState -p SubState -p Result -p ConditionResult \
+            -p AssertResult -p Job -p Requires -p Wants -p After >&2 || true
+    done
+    journalctl --no-pager --output=short-monotonic \
+        -u systemd-bless-boot.service \
+        -u particleos-pcrlock-prune.service >&2 || true
+    echo 'UPDATE_ROLLBACK_AUDIT_BLESSING_DIAGNOSTIC_END' >&2
+}
+
 write_state() {
     local path=$1 value=$2
     umask 077
@@ -158,6 +183,10 @@ initial)
 staged)
     if [[ $IMAGE_VERSION == "$base_version" ]]; then
         [[ $scenario == health-fallback ]]
+        if [[ ${#component_files[@]} -eq 2 && -e $ready ]]; then
+            echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_PENDING base=$base_version candidate=$candidate_version"
+            exit 0
+        fi
         [[ ${#component_files[@]} -eq 1 ]]
         [[ ${#installed_ukis[@]} -eq 2 ]]
         mapfile -t rejected_candidates < <(
@@ -184,6 +213,13 @@ staged)
     fi
 
     [[ $scenario == rollback-denial ]]
+    if [[ ${#component_files[@]} -eq 2 && -e $ready ]]; then
+        echo "UPDATE_ROLLBACK_AUDIT_BLESSING_PENDING version=$candidate_version"
+        exit 0
+    fi
+    if [[ ${#component_files[@]} -ne 1 || -e $ready ]]; then
+        dump_blessing_state
+    fi
     [[ ${#component_files[@]} -eq 1 ]]
     [[ ! -e $ready ]]
     read -r base_entry <"$base_entry_file"

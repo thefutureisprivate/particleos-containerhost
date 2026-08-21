@@ -299,7 +299,11 @@ candidate is evaluated.
 Boot blessing always requires host health and may require real Quadlet health
 after the administrator opts in. Once the selected boot is blessed,
 `particleos-pcrlock-prune.service` restricts state unlock to its UKI and
-removes the superseded measurement from the NV policy.
+removes the superseded measurement from the NV policy. If boot counting rejects
+a candidate first, the uncounted known-good slot accepts only a `+0-*` entry as
+fallback evidence, removes that candidate from the PCR policy before
+`multi-user.target`, and stops in emergency mode instead of rebooting again if
+the cleanup cannot be committed.
 
 ## Network Model
 
