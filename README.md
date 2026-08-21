@@ -554,7 +554,8 @@ The audit generates a disposable Ed25519 key, proves systemd-userdb exposes it
 while the home is inactive, disables every SSH password mechanism, answers the
 separate `systemd-home-fallback-shell` unlock prompt, enters the mounted home,
 and rejects SELinux denials from the SSH, userdb, or homed path. Its GTK VM is
-visible by default and is stopped automatically after the result is known.
+visible by default and is stopped automatically after the result is known. Set
+`HOMED_SSH_VM_DISPLAY=none` only for headless automation.
 
 Then run the complete local VM audit:
 
