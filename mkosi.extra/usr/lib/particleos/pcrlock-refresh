@@ -94,7 +94,7 @@ validate_uki() {
     resolved=$(realpath -e -- "$uki")
     [[ $resolved == "$uki_directory/"* && -f $resolved && ! -L $resolved ]]
     snapshot="$uki_snapshot_directory/${#ukis[@]}.efi"
-    /usr/bin/python3 /usr/lib/particleos/snapshot-uki "$resolved" \
+    /usr/lib/particleos/snapshot-uki "$resolved" \
         "$uki_snapshot_directory" "${#ukis[@]}.efi"
     [[ $(bootctl kernel-identify "$snapshot") == uki ]]
     sbverify --cert /usr/lib/verity.d/_projectcert.crt "$snapshot" >/dev/null

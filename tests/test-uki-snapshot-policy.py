@@ -4,14 +4,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from importlib.machinery import SourceFileLoader
-import importlib.util
+import os
 import subprocess
-import sys
 import tempfile
-
-sys.dont_write_bytecode = True
-
+import threading
+import time
 
 HELPER = (
     Path(__file__).resolve().parents[1]
@@ -21,7 +18,7 @@ HELPER = (
 
 def invoke(source: Path, destination: Path, name: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(HELPER), str(source), str(destination), name],
+        [str(HELPER), str(source), str(destination), name],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -54,34 +51,36 @@ def main() -> None:
         result = invoke(source, destination, "../escape.efi")
         assert result.returncode != 0
 
+        destination_symlink = root / "snapshot-link"
+        destination_symlink.symlink_to(rejected, target_is_directory=True)
+        result = invoke(source, destination_symlink, "0.efi")
+        assert result.returncode != 0
+        assert list(rejected.iterdir()) == []
+
         raced_source = root / "raced.efi"
-        raced_source.write_bytes(b"reviewed-before-open")
+        with raced_source.open("wb") as output:
+            output.truncate(64 * 1024 * 1024)
         raced_destination = root / "raced-snapshot"
         raced_destination.mkdir(mode=0o700)
-        loader = SourceFileLoader("particleos_snapshot_uki", str(HELPER))
-        spec = importlib.util.spec_from_loader(loader.name, loader)
-        assert spec is not None
-        module = importlib.util.module_from_spec(spec)
-        loader.exec_module(module)
-        original_copy = module.shutil.copyfileobj
+        stop = threading.Event()
 
-        def replace_path_after_open(input_file, output_file, length):
-            raced_source.unlink()
-            raced_source.write_bytes(b"attacker-replacement")
-            original_copy(input_file, output_file, length)
+        def mutate_source() -> None:
+            value = 0
+            while not stop.is_set():
+                with raced_source.open("r+b", buffering=0) as file:
+                    file.write(bytes((value,)))
+                    os.fsync(file.fileno())
+                value ^= 1
 
-        module.shutil.copyfileobj = replace_path_after_open
-        saved_argv = sys.argv
+        mutator = threading.Thread(target=mutate_source)
+        mutator.start()
+        time.sleep(0.01)
         try:
-            sys.argv = [str(HELPER), str(raced_source), str(raced_destination), "0.efi"]
-            try:
-                module.main()
-            except SystemExit:
-                pass
-            else:
-                raise AssertionError("path replacement during snapshot was accepted")
+            result = invoke(raced_source, raced_destination, "0.efi")
         finally:
-            sys.argv = saved_argv
+            stop.set()
+            mutator.join()
+        assert result.returncode != 0
         assert list(raced_destination.iterdir()) == []
 
     print("stable UKI policy-input snapshot tests passed")

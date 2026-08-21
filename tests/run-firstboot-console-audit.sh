@@ -117,6 +117,7 @@ truncate -s 16G "$disk"
 audit_service=$(base64 -w0 "$repository/tests/firstboot-console-audit.conf")
 audit_script=$(base64 -w0 "$repository/tests/firstboot-console-audit")
 audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
+pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
 
 swtpm socket \
     --tpm2 \
@@ -154,6 +155,7 @@ if ! env \
         -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-firstboot-audit=$audit_service" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate" \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
         -smbios "type=11,value=io.systemd.credential.binary:firstboot-console-audit=$audit_script"; then
     qemu_active=0
     stop_tpm

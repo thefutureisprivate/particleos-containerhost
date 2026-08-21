@@ -37,7 +37,7 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-/usr/bin/python3 /usr/lib/particleos/snapshot-uki "$booted_uki" "$snapshot" booted.efi
+/usr/lib/particleos/snapshot-uki "$booted_uki" "$snapshot" booted.efi
 [[ $(sha256sum -- "$snapshot/booted.efi" | cut -d ' ' -f1) == "$candidate_digest" ]]
 
 read -r boot_id </proc/sys/kernel/random/boot_id

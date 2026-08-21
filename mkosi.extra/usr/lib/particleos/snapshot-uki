@@ -1,73 +1,64 @@
-#!/usr/bin/python3
+#!/usr/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Copy one mutable ESP UKI into a private, stable policy input."""
+# Copy one mutable ESP UKI into a private, stable policy input without adding
+# a scripting-language runtime to the host image.
+set -euo pipefail
 
-from __future__ import annotations
+fail() {
+    echo "unsafe UKI input: $*" >&2
+    exit 1
+}
 
-import os
-from pathlib import Path
-import shutil
-import stat
-import sys
+[[ $# -eq 3 ]] || {
+    echo "usage: $0 SOURCE DESTINATION_DIRECTORY NAME" >&2
+    exit 2
+}
+source_path=$1
+destination=$2
+name=$3
+maximum_size=$((512 * 1024 * 1024))
 
+[[ $name =~ ^[A-Za-z0-9_.-]+$ && $name != . && $name != .. ]] ||
+    fail 'destination name is not a safe basename'
+[[ -d $destination && ! -L $destination ]] ||
+    fail 'destination is not a real directory'
+[[ -f $source_path && ! -L $source_path ]] ||
+    fail 'source is not a regular non-symlink file'
 
-MAX_UKI_SIZE = 512 * 1024 * 1024
+# Capture pathname identity around an O_NOFOLLOW copy. A rename, replacement,
+# resize, or in-place write changes at least one of these values. The copied
+# file is subsequently the sole input to signature, release-identity, digest,
+# and PCR-policy operations, so later ESP mutations cannot change admission.
+identity_before=$(stat -c '%d:%i:%s:%y:%z' -- "$source_path")
+size_before=$(stat -c %s -- "$source_path")
+[[ $size_before =~ ^[0-9]+$ && $size_before -ge 1 &&
+   $size_before -le $maximum_size ]] || fail 'source size is outside the bound'
 
+output=$destination/$name
+[[ ! -e $output && ! -L $output ]] || fail 'destination already exists'
+cleanup=1
+cleanup_output() {
+    local status=$?
+    if ((cleanup)) && [[ -f $output && ! -L $output ]]; then
+        rm -f -- "$output"
+    fi
+    exit "$status"
+}
+trap cleanup_output EXIT
+umask 077
+set -o noclobber
+: >"$output"
+set +o noclobber
+dd if="$source_path" of="$output" bs=1M iflag=nofollow,fullblock \
+    oflag=nofollow conv=notrunc status=none
+chmod 0400 "$output"
 
-def fail(message: str) -> "NoReturn":
-    raise SystemExit(f"unsafe UKI input: {message}")
-
-
-def main() -> None:
-    if len(sys.argv) != 4:
-        raise SystemExit(f"usage: {sys.argv[0]} SOURCE DESTINATION_DIRECTORY NAME")
-    source = Path(sys.argv[1])
-    destination = Path(sys.argv[2])
-    name = sys.argv[3]
-    if "/" in name or name in {"", ".", ".."}:
-        fail("destination name is not a basename")
-
-    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
-    destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        before = os.fstat(source_fd)
-        if not stat.S_ISREG(before.st_mode) or not 1 <= before.st_size <= MAX_UKI_SIZE:
-            fail("source is not a bounded regular file")
-        output_fd = os.open(
-            name,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o400,
-            dir_fd=destination_fd,
-        )
-        try:
-            with os.fdopen(os.dup(source_fd), "rb") as input_file, os.fdopen(
-                output_fd, "wb"
-            ) as output_file:
-                shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
-                output_file.flush()
-                os.fsync(output_file.fileno())
-        except BaseException:
-            try:
-                os.unlink(name, dir_fd=destination_fd)
-            except FileNotFoundError:
-                pass
-            raise
-        after = os.fstat(source_fd)
-        identity = lambda value: (
-            value.st_dev,
-            value.st_ino,
-            value.st_size,
-            value.st_mtime_ns,
-            value.st_ctime_ns,
-        )
-        if identity(before) != identity(after):
-            os.unlink(name, dir_fd=destination_fd)
-            fail("source changed while being snapshotted")
-        os.fsync(destination_fd)
-    finally:
-        os.close(destination_fd)
-        os.close(source_fd)
-
-
-if __name__ == "__main__":
-    main()
+identity_after=$(stat -c '%d:%i:%s:%y:%z' -- "$source_path")
+[[ $identity_before == "$identity_after" ]] ||
+    fail 'source changed while being snapshotted'
+[[ -f $output && ! -L $output ]] || fail 'snapshot is not a regular file'
+size_after=$(stat -c %s -- "$output")
+[[ $size_after == "$size_before" ]] || fail 'snapshot size differs from source'
+sync -f "$output"
+sync -f "$destination"
+cleanup=0
