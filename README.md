@@ -68,16 +68,16 @@ Fedora container host.
 Area | ParticleOS baseline | Container-host extension
 --- | --- | ---
 Image scope | Customizable distribution and package selection | One pinned Fedora 44 x86-64 host image with a fixed security model
-Release trust | Signed OBS image and update artifacts | Pinned OBS OpenPGP trust, signed checksum digests, full artifact hashes, and cryptographic UKI certificate verification
-Persistent state | TPM-bound encrypted root | PCR 7 bootstrap retained until a later boot proves the machine-local PCR 7+11 NV token
-Rollback | A/B slots and boot counting | Only the booted UKI and exact authenticated update candidate are authorized; the superseded UKI is revoked after blessing
+Release trust | Signed OBS image and update artifacts | Exact release schema, private immutable validation snapshot, pinned primary OpenPGP signer, manifest binding, and cryptographic UKI verification
+Persistent state | TPM-bound encrypted root | PCR 7 bootstrap retained until a later boot proves PCR 7+11, then retired while the LUKS volume key is rotated
+Rollback | A/B slots and boot counting | Only the booted UKI and exact candidate are authorized; encrypted-state receipts prove three failed boots without trusting mutable ESP names
 Workload runtime | General operating-system image | Rootful Podman using release-pinned runsc with `platform=systrap`
 Workload trust | Defined by the selected image | Exact default-deny OCI policy with administrator-provisioned repository trust
 Mandatory access control | Distribution SELinux and signed image integrity | Enforcing host policy with separate `container_runtime_t` and `gvisor_t` domains
 IPE | Signed IPE-capable boot profile | Signed container-host policy that protects kernel-fed objects while delegating systrap execution control to dm-verity, `noexec` state, and SELinux
 Networking | Distribution network defaults | Default-drop policy with exact bridge, address, protocol, and port tuples; workload DNS blocked
-Update activation | systemd-sysupdate workflow | Automatic reboot only after exact candidate PCR authorization; optional workload health receives three counted attempts before fallback
-Release qualification | mkosi image build | Repository and OBS publication gates, hostile archive checks, artifact authentication, and Secure Boot/TPM/container VM tests
+Update activation | systemd-sysupdate workflow | Automatic reboot only after exact candidate PCR authorization; optional workload health can veto twice, then the workload is quarantined and the host update proceeds
+Release qualification | mkosi image build | Exact stable build inputs, enforced publication gate, hostile-input parsers, artifact authentication, and Secure Boot/TPM/container VM tests
 
 ## Architecture
 
@@ -120,8 +120,8 @@ Readiness | systemd and Quadlet health gate | Container `HealthCmd=` result
 
 ## Features
 
-- Fedora 44 on x86-64, built with current mkosi, upstream-stable systemd, and
-  the upstream ParticleOS layout.
+- Fedora 44 on x86-64, built with mkosi 26 and one exact upstream-stable
+  systemd build on the upstream ParticleOS layout.
 - Signed systemd-boot and UKI with UEFI Secure Boot enforcement.
 - Explicitly enabled systemd-boot menu access to UEFI firmware setup on
   supported VM firmware.
@@ -137,8 +137,8 @@ Readiness | systemd and Quadlet health gate | Container `HealthCmd=` result
 - Rootful Podman with release-pinned gVisor runsc and systrap as the default
   runtime.
 - Signed OCI admission with an exact default-deny policy.
-- Optional Quadlet health gating for counted update candidates and guarded
-  automatic update reboot.
+- Optional, bounded Quadlet health gating for counted update candidates and
+  guarded automatic update reboot.
 - Default-drop nftables policy with per-bridge exact forwarding sets and no
   workload DNS path.
 - DNSSEC and strict DNS-over-TLS through systemd-resolved.
@@ -150,10 +150,11 @@ Readiness | systemd and Quadlet health gate | Container `HealthCmd=` result
 ParticleOS Container Host treats hardening as part of the image design rather
 than a post-install checklist.
 
-- **Artifact authenticity:** installation validation starts from a pinned OBS
-  OpenPGP fingerprint, authenticates the signed checksum digest and manifest,
-  hashes every artifact, extracts the project certificate, and uses
-  `sbverify --cert` to verify the UKI signature.
+- **Artifact authenticity:** installation validation first copies the exact
+  release schema into a private snapshot through no-follow file descriptors.
+  It then pins the sole primary OBS OpenPGP signer, binds the signed digest to
+  the selected checksum manifest, hashes every artifact, extracts the project
+  certificate, and uses `sbverify --cert` to verify the UKI signature.
 - **Verified boot:** systemd-boot, the UKI, its embedded command line, the
   kernel, initrd, and dm-verity root hash are covered by the signed boot chain.
 - **Encrypted state:** mutable `/etc`, `/var`, logs, keys, and container storage
@@ -163,6 +164,10 @@ than a post-install checklist.
   policy authorizes only the booted version and the exact newer candidate
   selected from authenticated systemd-sysupdate metadata. A renamed older
   project-signed UKI fails its embedded `IMAGE_VERSION` check.
+- **State rollback control:** the PCR 7 token remains only through a successful
+  reboot with the exact PCR 7+11 token. Bootstrap retirement re-encrypts the
+  state partition with a fresh volume key, so restoring its old LUKS2 header
+  cannot recover the old automatic-unlock path.
 - **Strict boot credentials:** the signed command line sets
   `systemd.credentials_boot_policy=strict`. The public pcrlock policy envelope
   follows systemd's dedicated loader, uses the stable image ID rather than a
@@ -191,13 +196,19 @@ than a post-install checklist.
   sidecar are root-owned mode `0750`. Unprivileged user-namespace creation is
   disabled; the bounded namespace allowance is confined to trusted system and
   runtime domains.
+- **Resource containment:** every workload starts with a 1 GiB memory maximum,
+  768 MiB memory-high threshold, no swap, two-CPU quota, 512-process cgroup
+  maximum, and bounded process/file rlimits. Root may deliberately override
+  these per workload.
 - **Filesystem hardening:** `/usr` is authenticated and mounted read-only with
   `nosuid,nodev`. Executable set-ID bits are stripped during the build and only
   Fedora's `unix_chkpwd` helper is restored.
 - **Service hardening:** systemd units use capability, namespace, address
   family, syscall, filesystem, device, memory, and privilege restrictions
   appropriate to their function.
-- **Network hardening:** input, output, and forwarding default to drop. DNSSEC,
+- **Network hardening:** input, output, and forwarding default to drop. A
+  dedicated startup target prevents networkd, Podman activation, and user
+  sessions from crossing a failed module/firewall/lockdown boundary. DNSSEC,
   strict DNS-over-TLS, NTP/NTS, narrow administrative SSH, update traffic, and
   registry traffic receive explicit host rules.
 - **Allocator policy:** `hardened_malloc` is preloaded and `no_rlimit_as`
@@ -226,9 +237,10 @@ against the host syscall ABI.
 
 Podman defaults to a read-only container root, private namespaces, a fresh
 session keyring, host user-ID mapping, fresh pulls, fully qualified image
-names, and runsc. Workload definitions should additionally drop capabilities,
-set CPU, memory, PID, and storage limits, use read-only mounts, define restart
-behavior, and publish only reviewed ports.
+names, runsc, and hard CPU, memory, swap, PID, process, and file ceilings.
+Workload definitions should reduce those limits where possible, drop
+capabilities, use read-only mounts, define restart behavior, and publish only
+reviewed ports.
 
 The factory `/etc/containers/policy.json` is:
 
@@ -261,11 +273,12 @@ systemctl enable particleos-workload-health.service
 
 The service becomes a direct requirement of `systemd-bless-boot.service` only
 after that opt-in and runs only when systemd-boot marks the selected deployment
-as counted. A failed probe leaves the candidate unblessed and reboots, consuming
-one of its three configured attempts. Only after all three attempts fail does
-systemd-boot select the uncounted working slot. The fallback skips the workload
-gate, so one broken application cannot reboot both A/B deployments forever.
-Disable the service to return to host-only blessing.
+as counted. Failed probes veto and reboot the first two attempts. On the third
+attempt, the host stops all Quadlet workloads, force-kills any runtime that
+does not stop within the bound, records the quarantine, and proceeds with the
+otherwise healthy host update. A compromised workload therefore cannot keep
+both A/B deployments in a permanent reboot loop. Disable the service to return
+to host-only blessing.
 
 ## Disk and Update Model
 
@@ -285,10 +298,11 @@ systemd-repart initially creates the LUKS2 state token against PCR 7 so the
 first boot can create the machine-local policy. The enrollment service predicts
 the current UKI in systemd-pcrlock's 650 kernel component slot, combines PCR 7
 and PCR 11, and adds the new token while retaining the PCR 7 bootstrap. It then
-reboots. On the next boot it explicitly unlock-tests that exact pcrlock token;
-only after this proof does one atomic enrollment operation remove every older
-TPM2 token. The 650 placement precedes the `750-enter-initrd` barrier at which
-state is unlocked.
+reboots. On the next boot it explicitly unlock-tests that exact pcrlock token,
+then performs token-only LUKS2 re-encryption to rotate the effective volume key
+and retain only the proved PCR policy. A bootstrap-era header then wraps an
+obsolete key. The 650 placement precedes the `750-enter-initrd` barrier at
+which state is unlocked.
 
 The update wrapper gets the exact newer version from systemd-sysupdate's signed
 metadata, installs that version with `Verify=yes`, checks the project signature
@@ -299,13 +313,14 @@ policy before activation. Boot counting retains the working slot while the
 candidate is evaluated.
 
 Boot blessing always requires host health and may require real Quadlet health
-after the administrator opts in. Once the selected boot is blessed,
-`particleos-pcrlock-prune.service` restricts state unlock to its UKI and
-removes the superseded measurement from the NV policy. If boot counting rejects
-a candidate first, the uncounted known-good slot accepts only a `+0-*` entry as
-fallback evidence, removes that candidate from the PCR policy before
-`multi-user.target`, and stops in emergency mode instead of rebooting again if
-the cleanup cannot be committed.
+after the administrator opts in. Each counted candidate boot first writes a
+unique receipt to encrypted state after matching the booted UKI to the admitted
+digest. After health succeeds, `particleos-pcrlock-prune.service` commits the
+single-UKI PCR policy before blessing can succeed. If a host failure exhausts
+all three boots, the known-good slot requires three distinct encrypted-state
+receipts before removing the rejected candidate. Mutable `+N-M` ESP filenames
+are never authorization evidence. Missing, malformed, or ambiguous state stops
+in emergency mode.
 
 ## Network Model
 
@@ -329,7 +344,10 @@ vendor configuration under `/etc/containers` is never used as mutable state.
 
 Workload forwarding is expressed through eight sets split by IPv4/IPv6,
 TCP/UDP, and ingress/egress. Every element also carries the exact Podman bridge
-interface, so permission on one network is not reusable from another.
+interface, so permission on one network is not reusable from another. Both
+directions of established workload flows are rechecked against these sets;
+deleting a tuple revokes the existing connection rather than only blocking new
+ones. Podman bridges are also rejected before host SSH or other host services.
 Provisioning adds exact tuples in root-owned files under
 `/etc/particleos/nftables.d/`:
 
@@ -348,7 +366,8 @@ Dependency | Version or source | Use
 --- | --- | ---
 ParticleOS | `dd4fdc2` | Immutable image, boot, repart, and update baseline
 Fedora | 44 | Userspace and kernel package base
-systemd and mkosi | upstream `system:systemd:stable` OBS packages / current mkosi | Released system lifecycle and image construction
+systemd | `261.2+5+gb40ecf731-57.14` from `system:systemd:stable` | Released system lifecycle
+mkosi | 26, with exact OBS helper hashes | Image construction and two-pass OBS handoff
 gVisor runsc | `release-20260810.0` | OCI sandbox runtime with systrap
 Podman | Fedora package | Rootful OCI image and workload management
 ipe-policy-containerhost | Signed local OBS package | Kernel-fed object policy compatible with systrap
@@ -366,7 +385,8 @@ The operating-system source is LGPL-2.1-or-later; see [LICENSE](LICENSE) and
 
 ## Build
 
-The repository requires current mkosi with `MinimumVersion=26~devel`.
+The repository requires the reviewed stable mkosi 26 release. Both OBS helper
+files are checked against their upstream v26 SHA-256 digests before execution.
 
 Run policy and structure validation, then build:
 
@@ -382,9 +402,16 @@ Production OBS packages are:
 - [`ipe-policy-containerhost`](https://build.opensuse.org/package/show/home:thefutureisprivate/ipe-policy-containerhost)
 
 The live container-host source service is pinned to one reviewed signed Git
-commit. `scripts/validate.sh` is enforced by GitHub CI and again inside the OBS
-build wrapper before either publication pass. OBS performs the final Secure
-Boot, UKI, and verity signing steps only after that gate passes.
+commit. `scripts/validate.sh` is enforced by GitHub CI and again in the first
+OBS pass. The signing pass accepts only the exact reviewed repart templates and
+release artifact schema, and its hostile archive inputs are parsed without
+general-purpose extraction.
+
+The OBS project, build workers, source handoff, and repository maintainers are
+part of the release trusted computing base. The detached signing pass protects
+private signing keys and produces authenticated artifacts; it is not an
+independent defense against malicious code already accepted by that trusted
+build boundary.
 
 OBS versions every image as `<Fedora release>.<source revision>.<rebuild>`, for
 example `44.85.1`. The Fedora prefix makes the userspace generation explicit;
@@ -400,19 +427,25 @@ path. The pinned OBS OpenPGP fingerprint is:
 0B2264A151F114677B1D0AAF25688B9E8208EED3
 ```
 
-Authenticate the complete artifact directory before writing a disk:
+Authenticate and snapshot the complete artifact directory before writing a
+disk. The destination must not already exist:
 
 ```console
-./scripts/validate-artifacts.sh /path/to/obs-artifacts
+./scripts/validate-artifacts.sh \
+  /path/to/obs-artifacts \
+  /path/to/authenticated-release
 ```
 
 The validator authenticates the detached signature over the checksum digest,
 the checksum manifest, and every release file. It extracts the project
 certificate from the UKI, requires certificate fingerprint
 `F18D066F4D25D63875BB0C370061D75A2AED67E81D33AF11669D79860BB9D2B7`,
-and cryptographically verifies the PE signature with `sbverify --cert`.
+and cryptographically verifies the PE signature with `sbverify --cert`. Use
+only files from `/path/to/authenticated-release` after validation; later
+changes in the download directory cannot substitute an artifact.
 
-Write the validated raw image to the whole disk of a dedicated VM or VPS. Do
+Write the authenticated snapshot's `.raw.zst` image to the whole disk of a
+dedicated VM or VPS. Do
 not share one instance between unrelated workloads. Boot with UEFI Secure Boot
 in setup mode so systemd-boot can enroll the OBS project certificate, then
 leave setup mode and verify Secure Boot.
@@ -479,8 +512,10 @@ transfer commits, then validates the exact candidate UKI and commits the
 two-UKI PCR policy before recording reboot readiness. The rebooted candidate
 must satisfy host health and, when the administrator has enabled it, Quadlet
 health before blessing. Each failed workload probe consumes one counted
-attempt; after three failures systemd-boot selects the uncounted fallback.
-Blessing either slot prunes the other UKI from state-unlock authorization.
+attempt. The third failure quarantines the workload and allows a healthy host
+deployment to commit; host-side failures still use all three attempts and then
+fall back. The PCR policy is narrowed to the selected UKI before blessing
+succeeds.
 
 ## Diagnostics and Tests
 
@@ -576,20 +611,25 @@ serial audit log remains authoritative and is still captured in the test
 directory. Omit the variable for headless automation.
 
 The enrollment boot retains PCR 7 and reboots. The next boot proves the exact
-PCR 7+11 token before removing bootstrap, then verifies Secure Boot, signed UKI
-and dm-verity, SELinux, IPE, `gvisor_t`, update policy, optional workload
-health, per-bridge firewall tuples, blocked workload DNS, module lockdown, OCI
-default-deny, administrative runtime modes, inherited Fedora/systemd service
-hardening, the upstream Ethernet profile, and the minimized kernel-module set. It
-rejects the fixture under the wrong key, accepts it under the exact trust root,
-runs it through Podman and runsc/systrap, and validates a healthy Quadlet.
+PCR 7+11 token, rotates the state volume key, and removes bootstrap. The audit
+then verifies Secure Boot, signed UKI and dm-verity, SELinux, IPE, `gvisor_t`,
+update policy, optional workload health, hard resource ceilings, per-bridge
+firewall tuples, established-flow revocation, host-service isolation, blocked
+workload DNS, SSH activation resilience, module lockdown, OCI default-deny,
+administrative runtime modes, inherited Fedora/systemd service hardening, the
+upstream Ethernet profile, and the minimized kernel-module set. It rejects the
+fixture under the wrong key, accepts it under the exact trust root, runs it
+through Podman and runsc/systrap, and validates a healthy Quadlet.
 
 The third boot reuses the same disk and TPM state to prove persistent automatic
-unlock and repeats the signed-container path. Every guest and TPM emulator
-stops after success or failure. A successful audit boot prints:
+unlock and repeats the signed-container path. The runner then restores the
+bootstrap-era LUKS2 header and requires state mount failure, followed by a
+separate injected nftables startup failure that must prevent networkd and user
+sessions from starting. Every guest and TPM emulator stops after success or
+failure. A successful audit boot prints:
 
 ```text
-PARTICLEOS_VM_AUDIT_PASS checks=106
+PARTICLEOS_VM_AUDIT_PASS checks=<count>
 ```
 
 Set `VM_AUDIT_KEEP_FAILED=1` to retain a failed guest disk and serial logs for
@@ -614,13 +654,14 @@ cannot enter the PCR policy, verifies the exact two-UKI policy, boots and
 blesses the candidate, confirms pruning to one UKI measurement, and then
 forces the superseded signed entry. That entry must reach the initrd emergency
 path before persistent state is unlocked. The second scenario repeats the
-update on clean state, injects a health failure on each of three counted
-attempts, verifies the `+2-1`, `+1-2`, and `+0-3` UKI states, and requires
-systemd-boot to return to the uncounted base version without running the
-workload gate there.
+update on clean state, injects workload-health failures, verifies two vetoed
+boots and third-attempt quarantine, blesses the healthy host, and denies the
+superseded UKI. The third scenario injects a host-side pre-blessing failure on
+all three counted boots, verifies three distinct encrypted-state receipts, and
+requires the uncounted base version to prune the rejected authorization.
 
 Set `VM_UPDATE_AUDIT_KEEP_FAILED=1` to retain disks and serial logs after a
-failure. The runner stops every QEMU and swtpm process in both scenarios.
+failure. The runner stops every QEMU and swtpm process in all scenarios.
 
 ## Residual Risks
 
@@ -635,7 +676,10 @@ failure. The runner stops every QEMU and swtpm process in both scenarios.
   than one anyway, isolation still depends on gVisor, namespaces, cgroups,
   per-bridge firewall policy, and explicit resource limits.
 - PCR 7 includes every key trusted by firmware in the state-unlock decision;
-  PCR 11 adds revocation of superseded UKIs after blessing.
+  PCR 11 adds measured-UKI authorization and revocation of superseded UKIs.
+- The OBS project, build workers, source handoff, signing service, repository
+  maintainers, pinned Fedora/systemd repositories, and firmware keys are part
+  of the release trusted computing base.
 - Recovery depends on independently verified signed media and escrowed LUKS
   material. Losing both TPM access and recovery material makes state
   unavailable.

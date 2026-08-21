@@ -1,0 +1,7 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+if systemctl is-enabled --quiet particleos-workload-health.service; then
+    systemctl is-active --quiet particleos-workload-health.service
+fi

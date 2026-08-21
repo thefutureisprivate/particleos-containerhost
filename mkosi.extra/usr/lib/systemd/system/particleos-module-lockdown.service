@@ -5,6 +5,8 @@ Requires=nftables.service particleos-module-preload.service
 After=nftables.service particleos-module-preload.service systemd-sysctl.service systemd-udevd.service
 Before=network-pre.target
 ConditionPathIsReadWrite=/proc/sys/kernel/modules_disabled
+OnFailure=emergency.target
+OnFailureJobMode=replace-irreversibly
 
 [Service]
 Type=oneshot

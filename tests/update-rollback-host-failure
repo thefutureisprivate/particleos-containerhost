@@ -1,0 +1,15 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+read -r scenario <"$CREDENTIALS_DIRECTORY/update-audit-scenario"
+read -r candidate_version <"$CREDENTIALS_DIRECTORY/update-audit-candidate-version"
+# shellcheck source=/dev/null
+source /usr/lib/os-release
+
+[[ $scenario == rollback-denial || $scenario == workload-quarantine ||
+   $scenario == host-fallback ]]
+if [[ $scenario == host-fallback && ${IMAGE_VERSION:-} == "$candidate_version" ]]; then
+    echo "UPDATE_ROLLBACK_AUDIT_HOST_FAILURE version=$candidate_version" >&2
+    exit 1
+fi

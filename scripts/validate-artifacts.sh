@@ -2,9 +2,17 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-[[ $# -eq 1 ]] || { echo "usage: $0 ARTIFACT_DIRECTORY" >&2; exit 2; }
+[[ $# -eq 1 || $# -eq 2 ]] || {
+    echo "usage: $0 ARTIFACT_DIRECTORY [AUTHENTICATED_SNAPSHOT]" >&2
+    exit 2
+}
 repository="$(cd "$(dirname "$0")/.." && pwd)"
-directory="$(realpath "$1")"
+source_directory=$1
+snapshot_destination=${2:-}
+scratch="$(mktemp -d /tmp/particleos-artifacts.XXXXXX)"
+trap 'rm -rf -- "${scratch:?}"' EXIT
+directory=$scratch/release
+/usr/bin/python3 "$repository/scripts/snapshot-artifacts.py" "$source_directory" "$directory"
 
 one_artifact() {
     local pattern=$1
@@ -18,30 +26,69 @@ one_artifact() {
 
 disk="$(one_artifact 'ParticleOS-Host_*_x86-64.raw.zst')"
 uki="$(one_artifact 'ParticleOS-Host_*.efi')"
+one_artifact 'ParticleOS-Host_*_x86-64.esp.raw.zst' >/dev/null
 manifest="$(one_artifact 'ParticleOS-Host_*.manifest.gz')"
 os_release="$(one_artifact 'ParticleOS-Host_*.osrelease')"
 repart_archive="$(one_artifact 'ParticleOS-Host_*.repart.tar')"
 checksum_manifest="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS')"
 checksum_digest="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS.sha256')"
 checksum_signature="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS.sha256.asc')"
-scratch="$(mktemp -d /tmp/particleos-artifacts.XXXXXX)"
-trap 'rm -rf -- "${scratch:?}"' EXIT
 
 trusted_key="$repository/mkosi.resources/particleos-obs-pubkey.gpg"
 expected_key_fingerprint=0B2264A151F114677B1D0AAF25688B9E8208EED3
-actual_key_fingerprint=$(gpg --batch --show-keys --with-colons "$trusted_key" |
-    sed -n 's/^fpr:::::::::\([^:]*\):$/\1/p' | head -n1)
-[[ $actual_key_fingerprint == "$expected_key_fingerprint" ]]
-gpg --batch --yes --dearmor --output "$scratch/trusted-keyring.gpg" "$trusted_key"
-gpgv --keyring "$scratch/trusted-keyring.gpg" \
-    "$checksum_signature" "$checksum_digest"
+mapfile -t primary_fingerprints < <(
+    gpg --batch --show-keys --with-colons "$trusted_key" |
+        awk -F: '$1 == "pub" { want = 1; next } want && $1 == "fpr" { print $10; want = 0 }'
+)
+[[ ${#primary_fingerprints[@]} -eq 1 &&
+   ${primary_fingerprints[0]} == "$expected_key_fingerprint" ]]
+install -d -m 0700 "$scratch/gnupg"
+GNUPGHOME=$scratch/gnupg gpg --batch --yes --dearmor \
+    --output "$scratch/trusted-keyring.gpg" "$trusted_key"
+signature_status=$(GNUPGHOME=$scratch/gnupg gpgv --homedir "$scratch/gnupg" \
+    --keyring "$scratch/trusted-keyring.gpg" --status-fd=1 \
+    "$checksum_signature" "$checksum_digest" 2>"$scratch/gpgv.log")
+mapfile -t valid_signatures < <(
+    awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 " " $NF }' \
+        <<<"$signature_status"
+)
+[[ ${#valid_signatures[@]} -eq 1 ]]
+read -r signing_fingerprint primary_fingerprint <<<"${valid_signatures[0]}"
+[[ $signing_fingerprint =~ ^[0-9A-F]{40}$ &&
+   $primary_fingerprint == "$expected_key_fingerprint" ]]
+
+checksum_basename=${checksum_manifest##*/}
+[[ $(wc -l <"$checksum_digest") -eq 1 ]]
+read -r signed_manifest_digest signed_manifest_name extra <"$checksum_digest"
+[[ $signed_manifest_digest =~ ^[0-9a-f]{64}$ &&
+   $signed_manifest_name == "$checksum_basename" &&
+   -z ${extra:-} ]]
+actual_manifest_digest=$(sha256sum -- "$checksum_manifest")
+actual_manifest_digest=${actual_manifest_digest%% *}
+[[ $actual_manifest_digest == "$signed_manifest_digest" ]]
+mapfile -t checksummed_names < <(
+    /usr/bin/python3 - "$checksum_manifest" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+names = []
+for line_number, line in enumerate(path.read_text().splitlines(), 1):
+    match = re.fullmatch(r"[0-9a-f]{64}  (ParticleOS-Host_[A-Za-z0-9_.-]+)", line)
+    if match is None:
+        raise SystemExit(f"unsafe checksum line {line_number}")
+    name = match.group(1)
+    if "/" in name or name in names:
+        raise SystemExit(f"unsafe checksum member {name!r}")
+    names.append(name)
+for name in sorted(names):
+    print(name)
+PY
+)
 (
     cd "$directory"
-    sha256sum -c "${checksum_digest##*/}"
-    sha256sum -c "${checksum_manifest##*/}"
-)
-mapfile -t checksummed_names < <(
-    sed -E 's/^[[:xdigit:]]{64} [ *]//' "$checksum_manifest" | sort
+    sha256sum -c "$checksum_basename"
 )
 mapfile -t published_names < <(
     find "$directory" -maxdepth 1 -type f \
@@ -84,6 +131,12 @@ sbverify --cert "$scratch/project-cert.crt" "$uki"
 # Authenticate the actual initial-installation boot path, not just the
 # separately published UKI. The full disk's ESP copy must be byte-identical and
 # independently pass PE signature verification.
+compressed_size=$(stat -c %s -- "$disk")
+expanded_size=$(zstd --list --verbose -- "$disk" 2>/dev/null |
+    sed -n -E 's/^Decompressed Size:.*\(([0-9]+) B\)$/\1/p')
+[[ $compressed_size -le $((8 * 1024 * 1024 * 1024)) &&
+   $expanded_size =~ ^[0-9]+$ &&
+   $expanded_size -le $((16 * 1024 * 1024 * 1024)) ]]
 zstd --sparse -q -d -f -o "$scratch/disk.raw" "$disk"
 esp_offset=$(systemd-repart --json=short "$scratch/disk.raw" |
     jq -r '.[] | select(.type == "esp") | .offset')
@@ -95,10 +148,11 @@ sbverify --cert "$scratch/project-cert.crt" "$scratch/embedded-uki.efi"
 
 image_id="$(sed -n 's/^IMAGE_ID=//p' "$os_release" | tr -d '"')"
 image_version="$(sed -n 's/^IMAGE_VERSION=//p' "$os_release" | tr -d '"')"
-[[ "$image_id" == ParticleOS-Host && "$image_version" =~ ^[0-9]+\.[0-9]+$ ]]
+[[ "$image_id" == ParticleOS-Host && "$image_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 
 definitions="$scratch/repart"
-"$repository/mkosi.scripts/repart-archive" "$repart_archive" "$definitions"
+"$repository/mkosi.scripts/repart-archive" "$repart_archive" "$definitions" \
+    "${image_id}_${image_version}_vsig"
 mapfile -t build_definitions < <(find "$definitions" -maxdepth 1 -type f -name '*.conf')
 [[ ${#build_definitions[@]} -eq 4 ]]
 grep -RqxF 'Type=usr-verity-sig' "$definitions"
@@ -153,4 +207,11 @@ grep -qxF 'Type=root' "$runtime/40-root.conf"
 grep -qxF 'Encrypt=tpm2' "$runtime/40-root.conf"
 grep -qxF 'TPM2PCRs=7' "$runtime/40-root.conf"
 
-echo 'Authenticated checksums, verified standalone and disk-embedded UKIs, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'
+if [[ -n $snapshot_destination ]]; then
+    [[ ! -e $snapshot_destination ]]
+    mv -- "$directory" "$snapshot_destination"
+    directory=
+    printf 'Authenticated snapshot: %s\n' "$snapshot_destination"
+fi
+
+echo 'Authenticated exact release snapshot, signer and checksums, standalone and disk-embedded UKIs, manifest, versioned verity label, base GPT, and runtime A/B layout passed.'

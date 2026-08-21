@@ -1,0 +1,73 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""Copy one mutable ESP UKI into a private, stable policy input."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import shutil
+import stat
+import sys
+
+
+MAX_UKI_SIZE = 512 * 1024 * 1024
+
+
+def fail(message: str) -> "NoReturn":
+    raise SystemExit(f"unsafe UKI input: {message}")
+
+
+def main() -> None:
+    if len(sys.argv) != 4:
+        raise SystemExit(f"usage: {sys.argv[0]} SOURCE DESTINATION_DIRECTORY NAME")
+    source = Path(sys.argv[1])
+    destination = Path(sys.argv[2])
+    name = sys.argv[3]
+    if "/" in name or name in {"", ".", ".."}:
+        fail("destination name is not a basename")
+
+    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode) or not 1 <= before.st_size <= MAX_UKI_SIZE:
+            fail("source is not a bounded regular file")
+        output_fd = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o400,
+            dir_fd=destination_fd,
+        )
+        try:
+            with os.fdopen(os.dup(source_fd), "rb") as input_file, os.fdopen(
+                output_fd, "wb"
+            ) as output_file:
+                shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
+                output_file.flush()
+                os.fsync(output_file.fileno())
+        except BaseException:
+            try:
+                os.unlink(name, dir_fd=destination_fd)
+            except FileNotFoundError:
+                pass
+            raise
+        after = os.fstat(source_fd)
+        identity = lambda value: (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+        if identity(before) != identity(after):
+            os.unlink(name, dir_fd=destination_fd)
+            fail("source changed while being snapshotted")
+        os.fsync(destination_fd)
+    finally:
+        os.close(destination_fd)
+        os.close(source_fd)
+
+
+if __name__ == "__main__":
+    main()

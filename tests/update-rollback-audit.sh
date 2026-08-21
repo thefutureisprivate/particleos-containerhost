@@ -10,7 +10,8 @@ read -r candidate_version <"$CREDENTIALS_DIRECTORY/update-audit-candidate-versio
 # shellcheck source=/dev/null
 source /usr/lib/os-release
 
-[[ $scenario == rollback-denial || $scenario == health-fallback ]]
+[[ $scenario == rollback-denial || $scenario == workload-quarantine ||
+   $scenario == host-fallback ]]
 [[ $base_version =~ ^[0-9]+([.][0-9]+)*$ ]]
 [[ $candidate_version =~ ^[0-9]+([.][0-9]+)*$ ]]
 [[ ${IMAGE_VERSION:-} =~ ^[0-9]+([.][0-9]+)*$ ]]
@@ -129,7 +130,7 @@ initial)
     candidate_json=$(systemd-sysupdate --json=short check-new)
     [[ $candidate_json == "{\"available\":\"${candidate_version}\"}" ]]
     echo "UPDATE_ROLLBACK_AUDIT_JSON version=$candidate_version"
-    if [[ $scenario == health-fallback ]]; then
+    if [[ $scenario == workload-quarantine ]]; then
         systemctl enable particleos-workload-health.service
         systemctl is-enabled --quiet particleos-workload-health.service
     fi
@@ -182,19 +183,15 @@ initial)
     ;;
 staged)
     if [[ $IMAGE_VERSION == "$base_version" ]]; then
-        [[ $scenario == health-fallback ]]
+        [[ $scenario == host-fallback ]]
         if [[ ${#component_files[@]} -eq 2 && -e $ready ]]; then
             echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_PENDING base=$base_version candidate=$candidate_version"
             exit 0
         fi
         [[ ${#component_files[@]} -eq 1 ]]
         [[ ${#installed_ukis[@]} -eq 2 ]]
-        mapfile -t rejected_candidates < <(
-            find "$uki_directory" -mindepth 1 -maxdepth 1 -type f \
-                -name "ParticleOS-Host_${candidate_version}_x86-64+0-*.efi" -print
-        )
-        [[ ${#rejected_candidates[@]} -eq 1 ]]
         [[ ! -e $ready ]]
+        [[ ! -e /var/lib/particleos/pcrlock-candidate-attempts ]]
         check_policy_pcrs
         [[ $(systemctl show -p ConditionResult --value \
             particleos-pcrlock-fallback-prune.service) == yes ]]
@@ -202,10 +199,10 @@ staged)
             particleos-pcrlock-fallback-prune.service) == success ]]
         fallback_journal=$(journalctl --no-pager --output=cat -b \
             -u particleos-pcrlock-fallback-prune.service)
-        grep -Fq "PARTICLEOS_PCRLOCK_FALLBACK_PRUNED base=$base_version candidate=$candidate_version" \
+        grep -Fq "PARTICLEOS_PCRLOCK_FALLBACK_PRUNED base=$base_version candidate=$candidate_version authenticated_attempts=3" \
             <<<"$fallback_journal"
         echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_CONFIRMED base=$base_version candidate=$candidate_version"
-        echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS base=$base_version candidate=$candidate_version variants=${#component_files[@]} rejected=${rejected_candidates[0]##*/}"
+        echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS base=$base_version candidate=$candidate_version variants=${#component_files[@]} authenticated_attempts=3"
         systemctl --no-block poweroff
         exit 0
     fi
@@ -214,14 +211,11 @@ staged)
     [[ ${#installed_ukis[@]} -eq 2 ]]
     check_policy_pcrs
 
-    if [[ $scenario == health-fallback ]]; then
-        [[ ${#component_files[@]} -eq 2 ]]
-        [[ -e $ready ]]
+    if [[ $scenario == workload-quarantine && ${#component_files[@]} -eq 2 && -e $ready ]]; then
         echo "UPDATE_ROLLBACK_AUDIT_HEALTH_PENDING version=$candidate_version"
         exit 0
     fi
 
-    [[ $scenario == rollback-denial ]]
     if [[ ${#component_files[@]} -eq 2 && -e $ready ]]; then
         echo "UPDATE_ROLLBACK_AUDIT_BLESSING_PENDING version=$candidate_version"
         exit 0
@@ -231,6 +225,14 @@ staged)
     fi
     [[ ${#component_files[@]} -eq 1 ]]
     [[ ! -e $ready ]]
+    if [[ $scenario == workload-quarantine ]]; then
+        workload_journal=$(journalctl --no-pager --output=cat -b \
+            -u particleos-workload-health.service)
+        grep -Fq "PARTICLEOS_WORKLOAD_QUARANTINED version=$candidate_version attempts=3" \
+            <<<"$workload_journal"
+    else
+        [[ $scenario == rollback-denial ]]
+    fi
     read -r base_entry <"$base_entry_file"
     [[ $base_entry == "ParticleOS-Host_${base_version}_x86-64.efi" ]]
     bootctl set-oneshot "$base_entry"

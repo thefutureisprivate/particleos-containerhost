@@ -4,7 +4,7 @@ set -euo pipefail
 
 marker=/var/lib/particleos/pcrlock-update-ready
 policy=/var/lib/systemd/pcrlock.json
-project_certificate=/usr/lib/verity.d/_projectcert.crt
+receipts=/var/lib/particleos/pcrlock-candidate-attempts
 
 [[ -s $marker && -s $policy ]]
 read -r policy_label policy_digest version_label candidate_version \
@@ -22,31 +22,29 @@ read -r policy_label policy_digest version_label candidate_version \
 source /usr/lib/os-release
 [[ ${IMAGE_ID:-} == ParticleOS-Host ]]
 [[ ${IMAGE_VERSION:-} =~ ^[0-9]+([.][0-9]+)*$ ]]
-[[ $IMAGE_VERSION != "$candidate_version" ]] || exit 0
+if [[ $IMAGE_VERSION == "$candidate_version" ]]; then
+    /usr/lib/particleos/pcrlock-refresh current
+    echo "PARTICLEOS_PCRLOCK_COMMIT_RECOVERED version=$IMAGE_VERSION"
+    exit 0
+fi
 newest=$(printf '%s\n%s\n' "$IMAGE_VERSION" "$candidate_version" | sort -V | tail -n1)
 [[ $newest == "$candidate_version" ]]
 
-boot_root=$(realpath -e -- "$(bootctl --print-boot-path)")
-uki_directory="$boot_root/EFI/Linux"
-[[ -d $uki_directory && ! -L $uki_directory ]]
-declare -a candidate_ukis=()
-while IFS= read -r -d '' candidate; do
-    candidate_ukis+=("$candidate")
-done < <(find "$uki_directory" -mindepth 1 -maxdepth 1 -type f \
-    -name "ParticleOS-Host_${candidate_version}_x86-64*.efi" -print0)
-
-# A freshly staged entry still has retries and remains authorized. Only a
-# boot-manager-rejected +0-* entry proves that this is a real fallback boot.
-if [[ ${#candidate_ukis[@]} -ne 1 ||
-      ${candidate_ukis[0]##*/} != "ParticleOS-Host_${candidate_version}_x86-64+0-"*.efi ]]; then
-    echo "ParticleOS fallback PCR pruning deferred: candidate $candidate_version is not marked bad"
-    exit 0
-fi
-
-candidate_uki=$(realpath -e -- "${candidate_ukis[0]}")
-[[ $candidate_uki == "$uki_directory/"* && -f $candidate_uki && ! -L $candidate_uki ]]
-[[ $(sha256sum -- "$candidate_uki" | cut -d ' ' -f1) == "$candidate_digest" ]]
-sbverify --cert "$project_certificate" "$candidate_uki" >/dev/null
+declare -A unique_boots=()
+[[ -s $receipts ]]
+while read -r candidate_label stored_version digest_label stored_digest \
+        boot_label stored_boot extra; do
+    [[ $candidate_label == candidate-version &&
+       $stored_version == "$candidate_version" &&
+       $digest_label == candidate-uki-sha256 &&
+       $stored_digest == "$candidate_digest" &&
+       $boot_label == boot-id &&
+       $stored_boot =~ ^[0-9a-f-]{36}$ &&
+       -z ${extra:-} ]]
+    [[ -z ${unique_boots[$stored_boot]+set} ]]
+    unique_boots[$stored_boot]=1
+done <"$receipts"
+[[ ${#unique_boots[@]} -eq 3 ]]
 
 /usr/lib/particleos/pcrlock-refresh current
-echo "PARTICLEOS_PCRLOCK_FALLBACK_PRUNED base=$IMAGE_VERSION candidate=$candidate_version"
+echo "PARTICLEOS_PCRLOCK_FALLBACK_PRUNED base=$IMAGE_VERSION candidate=$candidate_version authenticated_attempts=3"

@@ -11,8 +11,9 @@ Release:        0
 Summary:        Signed IPE policy for the ParticleOS gVisor container host
 License:        GPL-2.0-or-later
 Source0:        ipe-policy
+Source1:        extract-ipe-signature.py
 BuildArch:      noarch
-BuildRequires:  cpio
+BuildRequires:  cpio python3
 BuildRequires:  systemd
 Provides:       ipe-policy = %{version}-%{release}
 Obsoletes:      ipe-policy < %{version}
@@ -35,12 +36,11 @@ if [ ! -f %{_sourcedir}/hashes.cpio.rsasign.sig ]; then
     find . -type f -print0 | sort -z | cpio --null -H newc -o >%{_sourcedir}/../OTHER/hashes.cpio.rsasign
     popd
     install -m0644 %{SOURCE0} %{_sourcedir}/../OTHER/ipe-policy
+    install -m0644 %{SOURCE1} %{_sourcedir}/../OTHER/extract-ipe-signature.py
     install -m0644 %{_sourcedir}/ipe-policy-containerhost.spec %{_sourcedir}/../OTHER/ipe-policy-containerhost.spec
     touch %{buildroot}/etc/ipe/ipe-policy.p7b
 else
-    pushd hashes
-    cpio -idm <%{_sourcedir}/hashes.cpio.rsasign.sig
-    popd
+    /usr/bin/python3 %{SOURCE1} %{_sourcedir}/hashes.cpio.rsasign.sig hashes
     PATH=/usr/lib/systemd/:$PATH systemd-keyutil \
         --certificate %{_sourcedir}/_projectcert.crt \
         --output %{buildroot}/etc/ipe/ipe-policy.p7b \

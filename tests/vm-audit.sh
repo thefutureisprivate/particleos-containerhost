@@ -345,6 +345,15 @@ else
 fi
 
 check 'host nftables service is active' systemctl is-active --quiet nftables.service
+if systemctl is-active --quiet particleos-network-security.target &&
+        grep -qw particleos-network-security.target \
+            <<<"$(systemctl show systemd-networkd.service --property=After --value)" &&
+        grep -qw particleos-network-security.target \
+            <<<"$(systemctl show systemd-user-sessions.service --property=After --value)"; then
+    pass 'networking and administrator sessions crossed the fail-closed security target'
+else
+    fail 'networking and administrator sessions crossed the fail-closed security target'
+fi
 primary_interface=$(ip -4 route show default 2>/dev/null |
     sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n1)
 if [[ -n $primary_interface ]] &&
@@ -651,6 +660,32 @@ EOF
         printf '%s\n' "$gvisor_processes"
         fail 'live gVisor sandbox processes run in gvisor_t'
     fi
+    sandbox_pid=$(podman inspect --format '{{.State.Pid}}' "$health_container" 2>/dev/null || true)
+    sandbox_cgroup=
+    if [[ $sandbox_pid =~ ^[1-9][0-9]*$ ]]; then
+        sandbox_cgroup=$(awk -F: '$1 == "0" { print $3 }' "/proc/$sandbox_pid/cgroup")
+    fi
+    if [[ $sandbox_cgroup == /* &&
+          $(cat "/sys/fs/cgroup${sandbox_cgroup}/memory.max") == 1073741824 &&
+          $(cat "/sys/fs/cgroup${sandbox_cgroup}/memory.high") == 805306368 &&
+          $(cat "/sys/fs/cgroup${sandbox_cgroup}/memory.swap.max") == 0 &&
+          $(cat "/sys/fs/cgroup${sandbox_cgroup}/pids.max") == 512 &&
+          $(cat "/sys/fs/cgroup${sandbox_cgroup}/cpu.max") == '200000 100000' ]]; then
+        pass 'the default workload has hard cgroup memory, swap, process, and CPU ceilings'
+    else
+        printf 'sandbox pid=%q cgroup=%q\n' "$sandbox_pid" "$sandbox_cgroup"
+        for controller in memory.max memory.high memory.swap.max pids.max cpu.max; do
+            [[ -n $sandbox_cgroup ]] && printf '%s=%s\n' "$controller" \
+                "$(cat "/sys/fs/cgroup${sandbox_cgroup}/$controller" 2>/dev/null || echo missing)"
+        done
+        fail 'the default workload has hard cgroup memory, swap, process, and CPU ceilings'
+    fi
+    if [[ $(podman exec "$health_container" /bin/sh -c 'ulimit -Hn') == 8192 &&
+          $(podman exec "$health_container" /bin/sh -c 'ulimit -Hu') == 512 ]]; then
+        pass 'the default workload has bounded file and process rlimits'
+    else
+        fail 'the default workload has bounded file and process rlimits'
+    fi
     if [[ -n $health_container ]] &&
             podman exec "$health_container" /bin/sh -c 'command -v nc' >/dev/null 2>&1 &&
             ! timeout 8 podman exec "$health_container" \
@@ -718,6 +753,28 @@ EOF
         fail 'an egress tuple for one Podman bridge grants no authority to another'
     fi
 
+    revoke_file=/tmp/particleos-revoked-flow
+    if ((default_connect == 0)) &&
+            podman exec --detach "$health_container" /bin/sh -c \
+                "(printf before; sleep 6; printf after) | nc $isolation_target $isolation_port >$revoke_file 2>&1"; then
+        for _ in {1..20}; do
+            podman exec "$health_container" grep -qF before "$revoke_file" 2>/dev/null && break
+            sleep 0.1
+        done
+        nft delete element inet particleos_filter workload_egress_tcp4 \
+            "{ \"$default_bridge\" . $isolation_target . $isolation_port }"
+        sleep 7
+        revoked_output=$(podman exec "$health_container" cat "$revoke_file" 2>/dev/null || true)
+        if [[ $revoked_output == before ]]; then
+            pass 'removing an egress tuple revokes an already-established workload flow'
+        else
+            printf 'revoked flow output=%q\n' "$revoked_output"
+            fail 'removing an egress tuple revokes an already-established workload flow'
+        fi
+    else
+        fail 'removing an egress tuple revokes an already-established workload flow'
+    fi
+
     nft add element inet particleos_filter workload_egress_tcp4 \
         "{ \"$default_bridge\" . 1.1.1.1 . 53 }" 2>/dev/null || true
     if [[ -n $health_container ]] &&
@@ -730,6 +787,35 @@ EOF
     nft delete element inet particleos_filter workload_egress_tcp4 \
         "{ \"$default_bridge\" . $isolation_target . $isolation_port, \"$default_bridge\" . 1.1.1.1 . 53 }" \
         >/dev/null 2>&1 || true
+
+    host_gateway=$(podman network inspect podman \
+        --format '{{range .Subnets}}{{.Gateway}}{{end}}' 2>/dev/null || true)
+    if [[ $host_gateway =~ ^[0-9]+([.][0-9]+){3}$ ]] &&
+            systemctl start sshd.socket &&
+            ! timeout 8 podman exec "$health_container" \
+                /bin/nc -z -w 3 "$host_gateway" 22 >/dev/null 2>&1; then
+        pass 'a rootful workload cannot address the host SSH socket'
+    else
+        fail 'a rootful workload cannot address the host SSH socket'
+    fi
+    ssh_socket_limit=$(systemctl show sshd.socket --property=TriggerLimitBurst --value)
+    ssh_banners=0
+    for _ in {1..20}; do
+        # Literal command for the child shell.
+        # shellcheck disable=SC2016
+        if timeout 3 /usr/bin/bash -c \
+                'exec 3<>/dev/tcp/127.0.0.1/22; IFS= read -r -t 2 banner <&3; [[ $banner == SSH-* ]]'; then
+            ssh_banners=$((ssh_banners + 1))
+        fi
+    done
+    systemctl stop sshd.socket
+    if [[ $ssh_socket_limit == 0 && $ssh_banners -eq 20 ]]; then
+        pass 'distributed unauthenticated connections cannot disable SSH socket activation'
+    else
+        printf 'SSH TriggerLimitBurst=%q successful_banners=%d\n' \
+            "$ssh_socket_limit" "$ssh_banners"
+        fail 'distributed unauthenticated connections cannot disable SSH socket activation'
+    fi
     podman rm --force "$isolated_container" >/dev/null 2>&1 || true
     podman network rm "$isolated_network" >/dev/null 2>&1 || true
 
@@ -746,6 +832,11 @@ else
     fail 'an unlisted workload destination is denied by default'
     fail 'an egress tuple for one Podman bridge grants no authority to another'
     fail 'a forwarding tuple cannot reopen the blocked workload DNS channel'
+    fail 'removing an egress tuple revokes an already-established workload flow'
+    fail 'a rootful workload cannot address the host SSH socket'
+    fail 'distributed unauthenticated connections cannot disable SSH socket activation'
+    fail 'the default workload has hard cgroup memory, swap, process, and CPU ceilings'
+    fail 'the default workload has bounded file and process rlimits'
     fail 'a workload without health-gated readiness blocks blessing'
 fi
 if [[ -n $image_id ]] && systemctl stop vm-health.service >/dev/null 2>&1 &&

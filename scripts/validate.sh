@@ -97,7 +97,10 @@ reject_fixed 'pcrlock-refresh all' mkosi.extra/usr/lib/systemd/system/systemd-sy
 reject_fixed "-name 'ParticleOS-Host_*.efi'" mkosi.extra/usr/lib/particleos/pcrlock-refresh 'arbitrary project-signed ESP entries are not policy inputs'
 require_fixed 'pcrlock-bootstrap-pending' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap retirement records the enrollment boot'
 require_fixed 'cryptsetup open --type luks2 --test-passphrase --token-only' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'the exact pcrlock token is proved on a later boot'
-require_fixed '--wipe-slot=tpm2' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'proved TPM enrollments are replaced atomically'
+require_fixed 'cryptsetup reencrypt --batch-mode --token-only' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'proved PCR policy rotates the persistent-state volume key'
+# shellcheck disable=SC2016
+require_fixed '--token-id "$token_id" "$state"' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'volume-key rotation authenticates only through the proved PCR7+11 token'
+reject_fixed '--keep-key' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap retirement does not retain the replayable volume key'
 # shellcheck disable=SC2016
 require_fixed '[[ $current_boot != "$previous_boot" ]]' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap removal requires a different boot ID'
 require_fixed 'systemctl --no-block reboot' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap migration queues the proof reboot'
@@ -115,6 +118,11 @@ require_fixed 'RequiredBy=systemd-bless-boot.service' mkosi.extra/usr/lib/system
 require_fixed 'Before=systemd-bless-boot.service' mkosi.extra/usr/lib/systemd/system/particleos-workload-health.service 'blessing waits for an enabled health gate'
 require_fixed 'ExecStart=/usr/lib/particleos/workload-health-gate /usr/lib/particleos/check-workload-health' mkosi.extra/usr/lib/systemd/system/particleos-workload-health.service 'the production health probe rejects a failing candidate before returning'
 reject_fixed '/usr/lib/systemd/systemd-bless-boot bad' mkosi.extra/usr/lib/particleos/workload-health-gate 'an unhealthy candidate retains its remaining counted attempts'
+require_fixed 'PARTICLEOS_WORKLOAD_QUARANTINED' mkosi.extra/usr/lib/particleos/workload-health-gate 'a workload can delay two boots but is quarantined on the third attempt'
+# shellcheck disable=SC2016
+require_fixed '[[ ${#boot_ids[@]} -ge 3 ]]' mkosi.extra/usr/lib/particleos/workload-health-gate 'workload vetoes have a hard three-boot bound'
+require_fixed 'ExecStart=/usr/lib/particleos/record-candidate-attempt' mkosi.extra/usr/lib/systemd/system/particleos-candidate-attempt.service 'counted candidate boots create encrypted-state receipts'
+require_fixed 'enable particleos-candidate-attempt.service' mkosi.extra/usr/lib/systemd/system-preset/10-particleos.preset 'candidate receipt recording is always active'
 require_fixed 'TriesLeft=3' mkosi.sysupdate/20-uki.transfer 'locally built candidates receive three boot attempts'
 require_fixed 'TriesLeft=3' mkosi.obs.extra/usr/lib/sysupdate.d/20-particleos-kernel.transfer 'OBS candidates receive three boot attempts'
 require_fixed 'ipe-policy-containerhost' mkosi.conf 'the systrap-compatible signed IPE policy is selected'
@@ -159,6 +167,11 @@ require_fixed 'userns = "host"' "$containers" 'Podman does not create rootless I
 require_fixed 'keyring = true' "$containers" 'containers do not inherit the host caller keyring'
 require_fixed 'label = false' "$containers" 'unsupported gVisor container labeling is disabled'
 require_fixed 'read_only = true' "$containers" 'containers are read-only by default'
+require_fixed 'pids_limit = 512' "$containers" 'containers have a hard default process ceiling'
+require_fixed 'memory.max=1073741824' "$containers" 'containers have a hard default memory ceiling'
+require_fixed 'memory.swap.max=0' "$containers" 'containers cannot extend their memory ceiling through swap'
+require_fixed 'cpu.max=200000 100000' "$containers" 'containers have a hard default CPU ceiling'
+require_fixed 'default_ulimits = ["nofile=1024:8192", "nproc=512:512"]' "$containers" 'containers have bounded file and process rlimits'
 require_fixed 'pull_policy = "always"' "$containers" 'pulls always re-evaluate image trust'
 require_fixed 'network_config_dir = "/var/lib/containers/networks"' "$containers" 'Netavark definitions live in encrypted persistent state'
 require_fixed 'd /var/lib/containers/networks 0700 root root -' mkosi.extra/usr/lib/tmpfiles.d/etc.conf 'persistent network definitions are administrative-only'
@@ -279,6 +292,10 @@ require_fixed 'PermitRootLogin no' mkosi.extra/etc/ssh/sshd_config.d/40-particle
 require_fixed 'DNSOverTLS=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-particleos-dns.conf 'strict DNS-over-TLS is enabled'
 require_fixed 'DNSSEC=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-particleos-dns.conf 'DNSSEC is enabled'
 require_fixed 'baseurl=https://download.opensuse.org/repositories/system:/systemd:/stable/Fedora_44/' mkosi.profiles/obs-repos/systemd.repo 'systemd comes from the upstream stable OBS project'
+require_fixed 'repo_gpgcheck=1' mkosi.profiles/obs-repos/systemd.repo 'local systemd repository metadata is authenticated'
+require_fixed '261.2+5+gb40ecf731-57.14' mkosi.resources/systemd-version 'the reviewed systemd build is exact'
+require_fixed 'rpm -q --qf' mkosi.postinst.chroot 'image construction rejects any different signed systemd build'
+require_fixed '0B2264A151F114677B1D0AAF25688B9E8208EED3' mkosi.postinst.chroot 'the runtime update key has one pinned primary fingerprint'
 reject_fixed 'packages built from upstream main' mkosi.profiles/obs-repos/systemd.repo 'the image no longer consumes moving systemd main'
 require_fixed '        binutils' mkosi.conf 'objcopy is present for runtime UKI identity verification'
 
@@ -415,6 +432,11 @@ require_fixed 'ExecStart=/usr/lib/particleos/load-modules' mkosi.extra/usr/lib/s
 require_fixed '[[ $module =~ ^[a-z0-9_]+$ && -z ${extra:-} ]]' mkosi.extra/usr/lib/particleos/load-modules 'the sequential loader rejects malformed module-list entries'
 require_fixed 'Requires=particleos-module-preload.service' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall startup requires the fixed module preload'
 require_fixed 'Requires=nftables.service particleos-module-preload.service' mkosi.extra/usr/lib/systemd/system/particleos-module-lockdown.service 'irreversible lockdown requires both firewall and fixed modules'
+require_fixed 'Requires=particleos-module-preload.service nftables.service particleos-module-lockdown.service' mkosi.extra/usr/lib/systemd/system/particleos-network-security.target 'network activation has one fail-closed security boundary'
+require_fixed 'Requires=particleos-network-security.target' mkosi.extra/usr/lib/systemd/system/systemd-networkd.service.d/40-particleos-security.conf 'networkd cannot start without the security boundary'
+require_fixed 'Requires=particleos-network-security.target' mkosi.extra/usr/lib/systemd/system/systemd-user-sessions.service.d/40-particleos-security.conf 'administrator sessions cannot start after a security-boundary failure'
+require_fixed 'OnFailure=emergency.target' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall failure enters emergency mode'
+require_fixed 'TriggerLimitBurst=0' mkosi.extra/usr/lib/systemd/system/sshd.socket.d/40-particleos-firewall.conf 'distributed unauthenticated connections cannot disable SSH socket activation'
 reject_fixed '/usr/lib/modules-load.d/particleos.conf' mkosi.extra/usr/lib/particleos/load-modules 'container-only modules are not loaded in the boot-critical generic sysinit loader'
 reject_fixed 'nft delete table inet particleos_filter' mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf 'firewall startup has no expected deletion error'
 require_fixed 'MakeDirectories=/boot /efi' mkosi.extra/usr/lib/repart.d/40-root.conf 'the formatted root provides both boot-manager mountpoints'
@@ -531,7 +553,7 @@ require_fixed 'PARTICLEOS_HOMED_SSH_UNLOCK_PASS' tests/homed-ssh-expect.py 'the 
 require_fixed 'PARTICLEOS_HOMED_SSH_AVC_PASS' tests/homed-ssh-expect.py 'the SSH audit rejects SELinux denials on the unlock path'
 require_fixed 'HOMED_SSH_VM_DISPLAY:-gtk' tests/run-homed-ssh-audit.sh 'the homed SSH audit exposes a visible VM by default'
 require_fixed 'ParticleOS homed SSH unlock audit passed' tests/run-homed-ssh-audit.sh 'the homed SSH runner has an unambiguous success marker'
-require_fixed 'Requires=particleos-pcrlock-enroll.service systemd-homed-firstboot.service' tests/vm-audit-getty.conf 'the VM audit cannot race native administrator creation'
+require_fixed 'Requires=particleos-pcrlock-enroll.service systemd-homed-firstboot.service particleos-network-security.target' tests/vm-audit-getty.conf 'the VM audit cannot race administrator creation or network security'
 require_fixed 'Requires=particleos-pcrlock-enroll.service systemd-homed-firstboot.service' tests/update-rollback-audit-getty.conf 'the update audit cannot race native administrator creation'
 require_fixed 'After=particleos-pcrlock-enroll.service particleos-pcrlock-fallback-prune.service systemd-homed-firstboot.service' tests/update-rollback-audit-getty.conf 'the update audit waits for fallback policy cleanup when the base supports it'
 require_fixed 'SuccessAction=none' tests/update-rollback-audit-getty.conf 'the update audit cannot replace a production reboot with test poweroff'
@@ -546,9 +568,10 @@ require_fixed 'ConditionPathExists=!/sys/firmware/efi/efivars/LoaderBootCountPat
 require_fixed 'RequiredBy=multi-user.target' mkosi.extra/usr/lib/systemd/system/particleos-pcrlock-fallback-prune.service 'failed fallback pruning blocks normal host operation'
 require_fixed 'OnFailure=emergency.target' mkosi.extra/usr/lib/systemd/system/particleos-pcrlock-fallback-prune.service 'failed fallback pruning stops without another reboot loop'
 require_fixed 'OnFailureJobMode=replace-irreversibly' mkosi.extra/usr/lib/systemd/system/particleos-pcrlock-fallback-prune.service 'fallback cleanup failure cannot be canceled back into normal host operation'
-# Literal implementation pattern, not an expression for this validator.
 # shellcheck disable=SC2016
-require_fixed '!= "ParticleOS-Host_${candidate_version}_x86-64+0-"*.efi' mkosi.extra/usr/lib/particleos/pcrlock-prune-fallback 'fallback pruning requires a boot-manager-rejected candidate'
+require_fixed '[[ ${#unique_boots[@]} -eq 3 ]]' mkosi.extra/usr/lib/particleos/pcrlock-prune-fallback 'fallback pruning requires three unique encrypted-state boot receipts'
+require_fixed 'pcrlock-candidate-attempts' mkosi.extra/usr/lib/particleos/pcrlock-prune-fallback 'fallback authorization is independent of mutable ESP filenames'
+reject_fixed '+0-' mkosi.extra/usr/lib/particleos/pcrlock-prune-fallback 'mutable boot-count filenames are never rejection authority'
 require_fixed 'ConditionResult --value' tests/update-rollback-audit.sh 'the lifecycle audit proves fallback pruning was eligible on the known-good boot'
 require_fixed 'Result --value' tests/update-rollback-audit.sh 'the lifecycle audit proves fallback pruning completed successfully'
 require_fixed 'PARTICLEOS_PCRLOCK_FALLBACK_PRUNED base=' tests/update-rollback-audit.sh 'the lifecycle audit verifies the production fallback-prune journal marker'
@@ -577,10 +600,13 @@ reject_fixed 'sleep 30' tests/update-rollback-audit.sh 'update audit start jobs 
 # shellcheck disable=SC2016
 require_fixed '[[ -e $ready ]]' tests/update-rollback-audit.sh 'an unhealthy unblessed candidate retains the fallback PCR policy until reboot'
 require_fixed 'PARTICLEOS_WORKLOAD_CANDIDATE_FAILED' tests/run-update-rollback-audit.sh 'rollback audit observes each failed counted candidate boot'
-require_fixed 'assert_counted_health_attempt 2 2 1' tests/run-update-rollback-audit.sh 'rollback audit proves the first failed candidate boot leaves two attempts'
-require_fixed 'assert_counted_health_attempt 3 1 2' tests/run-update-rollback-audit.sh 'rollback audit proves the second failed candidate boot leaves one attempt'
-require_fixed 'assert_counted_health_attempt 4 0 3' tests/run-update-rollback-audit.sh 'rollback audit proves the third failed candidate boot exhausts its attempts'
-require_fixed 'run_guest health-fallback 5 clean' tests/run-update-rollback-audit.sh 'rollback audit falls back only after three failed candidate boots'
+require_fixed 'assert_counted_attempt 2 2 1' tests/run-update-rollback-audit.sh 'rollback audit proves the first counted candidate boot leaves two attempts'
+require_fixed 'assert_counted_attempt 3 1 2' tests/run-update-rollback-audit.sh 'rollback audit proves the second counted candidate boot leaves one attempt'
+require_fixed 'assert_counted_attempt 4 0 3' tests/run-update-rollback-audit.sh 'rollback audit proves the third counted candidate boot exhausts its attempts'
+require_fixed 'PARTICLEOS_WORKLOAD_QUARANTINED ' tests/run-update-rollback-audit.sh 'rollback audit proves workload veto is bounded at three boots'
+require_fixed 'run_guest workload-quarantine 5 denied' tests/run-update-rollback-audit.sh 'workload quarantine is followed by old-UKI rollback denial'
+require_fixed 'prepare_scenario host-fallback' tests/run-update-rollback-audit.sh 'rollback audit separately injects a real host-side candidate failure'
+require_fixed 'run_guest host-fallback 5 clean' tests/run-update-rollback-audit.sh 'host failure falls back only after three authenticated attempts'
 require_fixed 'run_guest rollback-denial 3 denied' tests/run-update-rollback-audit.sh 'rollback audit forces the superseded signed UKI after pruning'
 require_fixed 'UPDATE_ROLLBACK_AUDIT_DENIAL_PASS' tests/run-update-rollback-audit.sh 'rollback audit requires TPM denial of the superseded UKI'
 require_fixed 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS' tests/update-rollback-audit.sh 'rollback audit preserves legitimate pre-blessing fallback'
@@ -589,16 +615,23 @@ require_fixed 'ConditionPathExists=/sys/firmware/efi/efivars/LoaderBootCountPath
 reject_fixed 'FailureAction=' tests/update-rollback-health.conf 'rollback audit cannot weaken the production failure action'
 reject_fixed 'ConditionPathExists=' tests/update-rollback-health.conf 'rollback audit cannot replace the production counted-boot condition'
 require_fixed 'ExecStart=/usr/lib/particleos/workload-health-gate ' tests/update-rollback-health.conf 'rollback audit retains the production candidate-rejection gate'
-require_fixed 'x86-64+0-*.efi' tests/update-rollback-audit.sh 'fallback audit requires the unhealthy candidate to be marked bad'
 require_fixed 'systemctl enable particleos-workload-health.service' tests/update-rollback-audit.sh 'rollback audit opts into the production blessing dependency'
 require_fixed 'Requires=particleos-pcrlock-enroll.service' mkosi.extra/usr/lib/systemd/system/boot-complete.target.d/40-particleos-security-gates.conf 'first boot always includes the rollback gate'
 reject_fixed 'particleos-workload-health.service' mkosi.extra/usr/lib/systemd/system/boot-complete.target.d/40-particleos-security-gates.conf 'workload health is not mandatory in the factory transaction'
 reject_fixed 'particleos-workload-health.service' mkosi.extra/usr/lib/systemd/system/systemd-bless-boot.service.d/40-particleos-rollback.conf 'blessing uses the opt-in dependency created by systemctl enable'
-require_fixed 'Wants=particleos-pcrlock-prune.service' mkosi.extra/usr/lib/systemd/system/systemd-bless-boot.service.d/40-particleos-rollback.conf 'superseded UKIs are revoked only after blessing'
+require_fixed 'Requires=particleos-pcrlock-enroll.service particleos-candidate-attempt.service particleos-pcrlock-prune.service' mkosi.extra/usr/lib/systemd/system/systemd-bless-boot.service.d/40-particleos-rollback.conf 'blessing requires the PCR commit transaction'
+require_fixed 'Before=systemd-bless-boot.service' mkosi.extra/usr/lib/systemd/system/particleos-pcrlock-prune.service 'PCR authorization commits before blessing can succeed'
+require_fixed 'ExecStartPre=/usr/lib/particleos/require-optional-workload-health' mkosi.extra/usr/lib/systemd/system/particleos-pcrlock-prune.service 'an enabled workload gate must succeed before PCR commit'
 require_fixed 'Notify=healthy' mkosi.extra/usr/lib/particleos/check-workload-health 'Quadlet health must gate systemd readiness'
 require_fixed 'an egress tuple for one Podman bridge grants no authority to another' tests/vm-audit.sh 'VM audit exercises per-bridge egress isolation'
 require_fixed 'guestfwd=tcp:10.0.2.100:18443-cmd:/bin/cat' tests/run-vm-audit.sh 'bridge isolation uses a deterministic QEMU-local TCP endpoint'
 require_fixed 'a forwarding tuple cannot reopen the blocked workload DNS channel' tests/vm-audit.sh 'VM audit exercises workload DNS denial after an allowlist mistake'
+require_fixed 'removing an egress tuple revokes an already-established workload flow' tests/vm-audit.sh 'VM audit exercises immediate forwarding revocation'
+require_fixed 'a rootful workload cannot address the host SSH socket' tests/vm-audit.sh 'VM audit exercises host-service isolation from Podman bridges'
+require_fixed 'distributed unauthenticated connections cannot disable SSH socket activation' tests/vm-audit.sh 'VM audit exercises the unlimited socket activation trigger'
+require_fixed 'the default workload has hard cgroup memory, swap, process, and CPU ceilings' tests/vm-audit.sh 'VM audit reads the effective workload cgroup ceilings'
+require_fixed 'PARTICLEOS_LUKS_HEADER_REPLAY_DENIED' tests/run-vm-audit.sh 'VM audit restores and rejects a bootstrap-era LUKS header'
+require_fixed 'PARTICLEOS_NETWORK_SECURITY_FAIL_CLOSED' tests/run-vm-audit.sh 'VM audit injects and observes a fail-closed firewall startup failure'
 
 service=.obs/runsc/_service
 require_fixed 'release/20260810.0/x86_64/gvisor.tar.bz2' "$service" 'gVisor release archive is pinned'
@@ -612,9 +645,16 @@ reject_fixed 'PCR policy signing requires' mkosi.scripts/obs-build 'obsolete PCR
 # Literal implementation strings, not expressions for this validator.
 # shellcheck disable=SC2016
 require_fixed 'sha256sum -- "${artifact_names[@]}"' mkosi.scripts/obs-build 'checksums are regenerated after final signed artifacts are staged'
+require_fixed 'final artifact set differs from the exact release schema' mkosi.scripts/obs-build 'OBS rejects incomplete or surplus signed artifact sets'
+require_fixed 'f5a12b2941b8976239ab08a593a2e75f12d0f2ec981abbce88426cd3019d598d' mkosi.scripts/obs-build 'the reviewed stable mkosi.build helper is pinned'
+require_fixed '2f9616c19b7930e1b32429bccc5ba5a5622f33496da81daadbcab7c9a762c45b' mkosi.scripts/obs-postoutput 'the reviewed stable mkosi.postoutput helper is pinned'
+require_fixed "[[ \$(mkosi --version) == 'mkosi 26' ]]" mkosi.scripts/obs-build 'OBS rejects a different mkosi release'
 # shellcheck disable=SC2016
-require_fixed 'sha256sum -c "${checksum_manifest##*/}"' scripts/validate-artifacts.sh 'artifact validation verifies the published checksum manifest'
-require_fixed 'gpgv --keyring' scripts/validate-artifacts.sh 'artifact validation authenticates the checksum digest with the pinned OBS key'
+require_fixed 'sha256sum -c "$checksum_basename"' scripts/validate-artifacts.sh 'artifact validation verifies the authenticated checksum manifest'
+require_fixed 'snapshot-artifacts.py' scripts/validate-artifacts.sh 'artifact validation first creates an exact private release snapshot'
+# shellcheck disable=SC2016
+require_fixed 'primary_fingerprint == "$expected_key_fingerprint"' scripts/validate-artifacts.sh 'artifact validation pins the primary OpenPGP signer fingerprint'
+require_fixed 'gpgv --homedir' scripts/validate-artifacts.sh 'artifact validation authenticates the checksum digest in an isolated keyring'
 require_fixed 'sbverify --cert' scripts/validate-artifacts.sh 'artifact validation cryptographically verifies the UKI PE signature'
 # shellcheck disable=SC2016
 require_fixed 'cmp -- "$uki" "$scratch/embedded-uki.efi"' scripts/validate-artifacts.sh 'initial installation authenticates the UKI embedded in the published disk'
@@ -638,6 +678,9 @@ require_fixed 'name: security-gate' .github/workflows/security.yml 'GitHub repor
 require_fixed 'run: ./scripts/validate.sh' .github/workflows/security.yml 'GitHub executes the same publication policy suite'
 require_fixed 'actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09' .github/workflows/security.yml 'the CI checkout action is commit-pinned'
 python3 tests/test-repart-archive-policy.py && pass 'hostile repart archive cases are rejected' || failures=$((failures + 1))
+python3 tests/test-ipe-signature-archive-policy.py && pass 'hostile IPE signer-response archives are rejected' || failures=$((failures + 1))
+python3 tests/test-artifact-snapshot-policy.py && pass 'artifact validation uses an exact immutable release snapshot' || failures=$((failures + 1))
+python3 tests/test-uki-snapshot-policy.py && pass 'PCR policy generation uses stable verified UKI copies' || failures=$((failures + 1))
 
 for section in \
     '## Purpose' \
@@ -662,11 +705,48 @@ fi
 
 python3 - <<'PY' || failures=$((failures + 1))
 import xml.etree.ElementTree as ET
-for p in ('.obs/runsc/_service', '.obs/runsc/package-meta.xml',
-          '.obs/ipe-policy-containerhost/package-meta.xml',
-          '.obs/particleos-containerhost/_service.example',
-          '.obs/particleos-containerhost/package-meta.xml'):
+paths = ('.obs/runsc/_service', '.obs/runsc/package-meta.xml',
+         '.obs/ipe-policy-containerhost/package-meta.xml',
+         '.obs/particleos-containerhost/_service.example',
+         '.obs/particleos-containerhost/package-meta.xml')
+for p in paths:
     ET.parse(p)
+
+root = ET.parse('.obs/runsc/_service').getroot()
+expected = (
+    ('download_url', {
+        'protocol': 'https',
+        'host': 'storage.googleapis.com',
+        'path': 'gvisor/releases/release/20260810.0/x86_64/gvisor.tar.bz2',
+        'filename': 'gvisor.tar.bz2',
+    }),
+    ('verify_file', {
+        'file': '_service:download_url:gvisor.tar.bz2',
+        'verifier': 'sha256',
+        'checksum': '3eca0158249c6b9b1f0d96c8f429c2aec6a4bcabd1a549bf25b15e48ca6d1d0c',
+    }),
+    ('download_url', {
+        'protocol': 'https',
+        'host': 'raw.githubusercontent.com',
+        'path': 'google/gvisor/release-20260810.0/LICENSE',
+        'filename': 'LICENSE.gvisor',
+    }),
+    ('verify_file', {
+        'file': '_service:download_url:LICENSE.gvisor',
+        'verifier': 'sha256',
+        'checksum': '0fbab5c58efbdf6d31e8085214f2dd821659c03d73cff3ed2b08e98826ea1cd9',
+    }),
+)
+assert root.tag == 'services' and not root.attrib
+assert len(root) == len(expected)
+for service, (name, parameters) in zip(root, expected, strict=True):
+    assert service.tag == 'service' and service.attrib == {'name': name}
+    actual = {}
+    for parameter in service:
+        assert parameter.tag == 'param' and set(parameter.attrib) == {'name'}
+        assert len(parameter) == 0 and parameter.attrib['name'] not in actual
+        actual[parameter.attrib['name']] = (parameter.text or '').strip()
+    assert actual == parameters
 print('ok - OBS service and package XML is well formed')
 PY
 

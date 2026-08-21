@@ -2,12 +2,24 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-resource_dir="$(/usr/bin/python3 -c '
-from pathlib import Path
-import mkosi.resources
-print(Path(mkosi.resources.__file__).parent / "mkosi-obs")
-')"
-upstream_helper="$resource_dir/mkosi.postoutput"
+[[ $(mkosi --version) == 'mkosi 26' ]] || {
+    echo "mkosi is not the reviewed stable v26 release" >&2
+    exit 1
+}
+mapfile -t upstream_helpers < <(
+    rpm -ql mkosi | grep -E '/mkosi/resources/mkosi-obs/mkosi[.]postoutput$'
+)
+[[ ${#upstream_helpers[@]} -eq 1 ]] || {
+    echo "Cannot locate exactly one packaged mkosi.postoutput helper" >&2
+    exit 1
+}
+upstream_helper=${upstream_helpers[0]}
+expected_upstream_helper_digest=2f9616c19b7930e1b32429bccc5ba5a5622f33496da81daadbcab7c9a762c45b
+[[ $(rpm -qf --qf '%{NAME}\n' "$upstream_helper") == mkosi &&
+   $(sha256sum -- "$upstream_helper" | cut -d ' ' -f1) == "$expected_upstream_helper_digest" ]] || {
+    echo "Packaged mkosi.postoutput differs from reviewed upstream v26" >&2
+    exit 1
+}
 build_wrapper=/usr/src/packages/SOURCES/particleos-containerhost/mkosi.scripts/obs-build
 archive_helper=/usr/src/packages/SOURCES/particleos-containerhost/mkosi.scripts/repart-archive
 

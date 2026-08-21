@@ -35,7 +35,11 @@ for command in awk base64 cp find grep mktemp python3 qemu-system-x86_64 \
     command -v "$command" >/dev/null || { echo "missing required command: $command" >&2; exit 1; }
 done
 
-"$repository/scripts/validate-artifacts.sh" "$artifact_directory"
+snapshot_root=$(mktemp -d "$audit_tmpdir/.particleos-artifact-snapshot.XXXXXXXX")
+trap 'rm -rf -- "$snapshot_root"' EXIT
+authenticated_artifacts=$snapshot_root/release
+"$repository/scripts/validate-artifacts.sh" "$artifact_directory" "$authenticated_artifacts"
+artifact_directory=$authenticated_artifacts
 mapfile -t compressed_images < <(
     find "$artifact_directory" -maxdepth 1 -type f \
         -name 'ParticleOS-Host_*_x86-64.raw.zst' -print
@@ -95,6 +99,7 @@ cleanup() {
     stop_qemu
     reap_qemu
     stop_tpm
+    rm -rf -- "$snapshot_root"
     if ((status != 0)) && [[ $keep_failed == 1 ]]; then
         echo "Preserved failed homed SSH audit state: $scratch" >&2
     elif [[ -n ${scratch:-} && -d $scratch &&

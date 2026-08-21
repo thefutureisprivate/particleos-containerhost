@@ -1,0 +1,9 @@
+[Unit]
+Description=ParticleOS fail-closed network security boundary
+DefaultDependencies=no
+Requires=particleos-module-preload.service nftables.service particleos-module-lockdown.service
+After=particleos-module-preload.service nftables.service particleos-module-lockdown.service
+Before=network-pre.target
+
+[Install]
+RequiredBy=network-pre.target

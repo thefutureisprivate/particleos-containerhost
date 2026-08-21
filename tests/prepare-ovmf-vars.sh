@@ -40,16 +40,6 @@ done
 # checks every published digest, verifies the UKI signature with the pinned OBS
 # certificate, and validates the embedded certificate before it becomes a UEFI
 # trust anchor.
-"$repository/scripts/validate-artifacts.sh" "$artifact_directory"
-mapfile -t ukis < <(
-    find "$artifact_directory" -maxdepth 1 -type f \
-        -name 'ParticleOS-Host_*.efi' -print
-)
-[[ ${#ukis[@]} -eq 1 ]] || {
-    echo "expected one authenticated UKI, found ${#ukis[@]}" >&2
-    exit 1
-}
-
 scratch=$(mktemp -d "$output_directory/.particleos-ovmf-vars.XXXXXXXX")
 cleanup() {
     local status=$?
@@ -59,6 +49,16 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
+"$repository/scripts/validate-artifacts.sh" "$artifact_directory" "$scratch/release"
+artifact_directory=$scratch/release
+mapfile -t ukis < <(
+    find "$artifact_directory" -maxdepth 1 -type f \
+        -name 'ParticleOS-Host_*.efi' -print
+)
+[[ ${#ukis[@]} -eq 1 ]] || {
+    echo "expected one authenticated UKI, found ${#ukis[@]}" >&2
+    exit 1
+}
 
 objcopy --dump-section ".initrd=$scratch/initrd" "${ukis[0]}" "$scratch/uki.copy"
 lsinitrd --file usr/lib/verity.d/_projectcert.crt "$scratch/initrd" \

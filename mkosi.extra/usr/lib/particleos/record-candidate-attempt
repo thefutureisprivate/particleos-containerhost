@@ -1,0 +1,81 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+marker=/var/lib/particleos/pcrlock-update-ready
+receipts=/var/lib/particleos/pcrlock-candidate-attempts
+lock=/var/lib/particleos/pcrlock-candidate-attempts.lock
+[[ -s $marker ]]
+
+read -r policy_label policy_digest version_label candidate_version \
+    uki_label candidate_digest extra <"$marker"
+[[ $policy_label == pcrlock-policy-sha256 &&
+   $policy_digest =~ ^[0-9a-f]{64}$ &&
+   $version_label == candidate-version &&
+   $candidate_version =~ ^[0-9]+([.][0-9]+)*$ &&
+   $uki_label == candidate-uki-sha256 &&
+   $candidate_digest =~ ^[0-9a-f]{64}$ &&
+   -z ${extra:-} ]]
+
+# shellcheck source=/dev/null
+source /usr/lib/os-release
+[[ ${IMAGE_ID:-} == ParticleOS-Host && ${IMAGE_VERSION:-} == "$candidate_version" ]]
+mapfile -t count_variables < <(
+    compgen -G '/sys/firmware/efi/efivars/LoaderBootCountPath-*' || :
+)
+[[ ${#count_variables[@]} -eq 1 ]]
+
+boot_root=$(realpath -e -- "$(bootctl --print-boot-path)")
+uki_directory="$boot_root/EFI/Linux"
+booted_uki=$(realpath -e -- "$(bootctl --print-stub-path)")
+[[ $booted_uki == "$uki_directory/"* && -f $booted_uki && ! -L $booted_uki ]]
+snapshot=$(mktemp -d /run/particleos-candidate-receipt.XXXXXXXX)
+cleanup() {
+    if [[ -d $snapshot && $snapshot == /run/particleos-candidate-receipt.* ]]; then
+        find "$snapshot" -maxdepth 1 -type f -delete
+        rmdir "$snapshot"
+    fi
+}
+trap cleanup EXIT
+/usr/bin/python3 /usr/lib/particleos/snapshot-uki "$booted_uki" "$snapshot" booted.efi
+[[ $(sha256sum -- "$snapshot/booted.efi" | cut -d ' ' -f1) == "$candidate_digest" ]]
+
+read -r boot_id </proc/sys/kernel/random/boot_id
+[[ $boot_id =~ ^[0-9a-f-]{36}$ ]]
+install -d -m 0700 /var/lib/particleos
+exec 9>"$lock"
+flock -x 9
+
+declare -a boot_ids=()
+if [[ -e $receipts ]]; then
+    while read -r candidate_label stored_version digest_label stored_digest \
+            boot_label stored_boot extra; do
+        [[ $candidate_label == candidate-version &&
+           $stored_version == "$candidate_version" &&
+           $digest_label == candidate-uki-sha256 &&
+           $stored_digest == "$candidate_digest" &&
+           $boot_label == boot-id &&
+           $stored_boot =~ ^[0-9a-f-]{36}$ &&
+           -z ${extra:-} ]]
+        boot_ids+=("$stored_boot")
+    done <"$receipts"
+fi
+
+for stored_boot in "${boot_ids[@]}"; do
+    if [[ $stored_boot == "$boot_id" ]]; then
+        echo "PARTICLEOS_CANDIDATE_ATTEMPT_RECORDED version=$candidate_version count=${#boot_ids[@]} boot=$boot_id"
+        exit 0
+    fi
+done
+[[ ${#boot_ids[@]} -lt 3 ]]
+temporary=$(mktemp /var/lib/particleos/.candidate-attempts.XXXXXXXX)
+chmod 0600 "$temporary"
+if [[ -e $receipts ]]; then
+    cat -- "$receipts" >"$temporary"
+fi
+printf 'candidate-version %s candidate-uki-sha256 %s boot-id %s\n' \
+    "$candidate_version" "$candidate_digest" "$boot_id" >>"$temporary"
+sync -f "$temporary"
+mv -- "$temporary" "$receipts"
+sync -f /var/lib/particleos
+echo "PARTICLEOS_CANDIDATE_ATTEMPT_RECORDED version=$candidate_version count=$((${#boot_ids[@]} + 1)) boot=$boot_id"

@@ -1,11 +1,15 @@
 [Unit]
-Description=Revoke superseded UKIs after boot blessing
+Description=Commit candidate PCR authorization before boot blessing
 Documentation=https://github.com/thefutureisprivate/particleos-containerhost#updates
 ConditionSecurity=measured-uki
 ConditionPathExists=/var/lib/particleos/pcrlock-update-ready
-After=systemd-bless-boot.service
-Requires=systemd-bless-boot.service
+ConditionPathExists=/sys/firmware/efi/efivars/LoaderBootCountPath-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+Requires=particleos-pcrlock-enroll.service particleos-candidate-attempt.service
+After=particleos-pcrlock-enroll.service particleos-candidate-attempt.service particleos-workload-health.service
+Before=systemd-bless-boot.service
+FailureAction=reboot
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/lib/particleos/require-optional-workload-health
 ExecStart=/usr/lib/particleos/pcrlock-refresh current

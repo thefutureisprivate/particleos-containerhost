@@ -57,6 +57,22 @@ current_uki=$(realpath -e -- "$current_uki")
 [[ $current_uki == "$uki_directory/"* && -f $current_uki && ! -L $current_uki ]]
 
 declare -a ukis=() digests=()
+component_parent=/var/lib/pcrlock.d
+uki_snapshot_directory=$(mktemp -d /run/particleos-uki-policy.XXXXXXXX)
+chmod 0700 "$uki_snapshot_directory"
+staging=
+cleanup() {
+    if [[ -n ${staging:-} && -d $staging && $staging == "$component_parent/".particleos-uki.* ]]; then
+        find "$staging" -maxdepth 1 -type f -delete
+        rmdir "$staging"
+    fi
+    if [[ -d $uki_snapshot_directory && $uki_snapshot_directory == /run/particleos-uki-policy.* ]]; then
+        find "$uki_snapshot_directory" -maxdepth 1 -type f -delete
+        rmdir "$uki_snapshot_directory"
+    fi
+}
+trap cleanup EXIT
+
 read_uki_identity() (
     set -euo pipefail
     local uki=$1 scratch image_id image_version
@@ -74,20 +90,23 @@ read_uki_identity() (
 )
 
 validate_uki() {
-    local uki=$1 expected_version=$2 resolved digest identity image_id image_version extra
+    local uki=$1 expected_version=$2 resolved snapshot digest identity image_id image_version extra
     resolved=$(realpath -e -- "$uki")
     [[ $resolved == "$uki_directory/"* && -f $resolved && ! -L $resolved ]]
-    [[ $(bootctl kernel-identify "$resolved") == uki ]]
-    sbverify --cert /usr/lib/verity.d/_projectcert.crt "$resolved" >/dev/null
+    snapshot="$uki_snapshot_directory/${#ukis[@]}.efi"
+    /usr/bin/python3 /usr/lib/particleos/snapshot-uki "$resolved" \
+        "$uki_snapshot_directory" "${#ukis[@]}.efi"
+    [[ $(bootctl kernel-identify "$snapshot") == uki ]]
+    sbverify --cert /usr/lib/verity.d/_projectcert.crt "$snapshot" >/dev/null
 
-    identity=$(read_uki_identity "$resolved")
+    identity=$(read_uki_identity "$snapshot")
     read -r image_id image_version extra <<<"$identity"
     [[ -z ${extra:-} ]]
     [[ $image_id == "$current_image_id" && $image_version == "$expected_version" ]]
 
-    digest=$(sha256sum -- "$resolved")
+    digest=$(sha256sum -- "$snapshot")
     digest=${digest%% *}
-    ukis+=("$resolved")
+    ukis+=("$snapshot")
     digests+=("$digest")
 }
 
@@ -108,7 +127,6 @@ if [[ $mode == candidate ]]; then
     candidate_digest=${digests[1]}
 fi
 
-component_parent=/var/lib/pcrlock.d
 component="$component_parent/650-particleos-uki.pcrlock.d"
 previous="$component_parent/.particleos-uki.previous"
 failed="$component_parent/.particleos-uki.failed"
@@ -117,13 +135,6 @@ obsolete_backup="$component_parent/.particleos-uki.obsolete"
 install -d -m 0700 "$component_parent"
 [[ ! -e $previous && ! -e $failed && ! -e $obsolete_backup ]]
 staging=$(mktemp -d "$component_parent/.particleos-uki.XXXXXXXX")
-cleanup() {
-    if [[ -n ${staging:-} && -d $staging && $staging == "$component_parent/".particleos-uki.* ]]; then
-        find "$staging" -maxdepth 1 -type f -delete
-        rmdir "$staging"
-    fi
-}
-trap cleanup EXIT
 
 restore_components() {
     mv -- "$component" "$failed"
@@ -226,5 +237,7 @@ if [[ $mode == candidate ]]; then
         >/var/lib/particleos/pcrlock-update-ready
     chmod 0600 /var/lib/particleos/pcrlock-update-ready
 else
-    rm -f -- /var/lib/particleos/pcrlock-update-ready
+    rm -f -- /var/lib/particleos/pcrlock-update-ready \
+        /var/lib/particleos/pcrlock-candidate-attempts \
+        /var/lib/particleos/workload-health-attempts
 fi

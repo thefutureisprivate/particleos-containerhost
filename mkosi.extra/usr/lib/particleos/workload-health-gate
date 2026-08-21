@@ -1,21 +1,88 @@
 #!/usr/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
-set -uo pipefail
+set -euo pipefail
 
 if (($# == 0)); then
     echo 'workload health gate requires a probe command' >&2
     exit 2
 fi
 
-"$@"
-probe_status=$?
-if ((probe_status == 0)); then
+if "$@"; then
+    rm -f -- /var/lib/particleos/workload-health-attempts
+    exit 0
+else
+    probe_status=$?
+fi
+
+marker=/var/lib/particleos/pcrlock-update-ready
+attempts=/var/lib/particleos/workload-health-attempts
+lock=/var/lib/particleos/workload-health-attempts.lock
+[[ -s $marker ]]
+read -r policy_label policy_digest version_label candidate_version \
+    uki_label candidate_digest extra <"$marker"
+[[ $policy_label == pcrlock-policy-sha256 &&
+   $policy_digest =~ ^[0-9a-f]{64}$ &&
+   $version_label == candidate-version &&
+   $candidate_version =~ ^[0-9]+([.][0-9]+)*$ &&
+   $uki_label == candidate-uki-sha256 &&
+   $candidate_digest =~ ^[0-9a-f]{64}$ &&
+   -z ${extra:-} ]]
+# shellcheck source=/dev/null
+source /usr/lib/os-release
+[[ ${IMAGE_VERSION:-} == "$candidate_version" ]]
+read -r boot_id </proc/sys/kernel/random/boot_id
+[[ $boot_id =~ ^[0-9a-f-]{36}$ ]]
+
+install -d -m 0700 /var/lib/particleos
+exec 9>"$lock"
+flock -x 9
+declare -a boot_ids=()
+declare -A seen_boot_ids=()
+if [[ -e $attempts ]]; then
+    while read -r version stored_version digest stored_digest boot stored_boot extra; do
+        [[ $version == candidate-version &&
+           $stored_version == "$candidate_version" &&
+           $digest == candidate-uki-sha256 &&
+           $stored_digest == "$candidate_digest" &&
+           $boot == boot-id &&
+           $stored_boot =~ ^[0-9a-f-]{36}$ &&
+           -z ${extra:-} ]]
+        [[ -z ${seen_boot_ids[$stored_boot]+set} ]]
+        seen_boot_ids[$stored_boot]=1
+        boot_ids+=("$stored_boot")
+    done <"$attempts"
+fi
+if [[ ! " ${boot_ids[*]} " =~ [[:space:]]${boot_id}[[:space:]] ]]; then
+    temporary=$(mktemp /var/lib/particleos/.workload-health.XXXXXXXX)
+    chmod 0600 "$temporary"
+    [[ ! -e $attempts ]] || cat -- "$attempts" >"$temporary"
+    printf 'candidate-version %s candidate-uki-sha256 %s boot-id %s\n' \
+        "$candidate_version" "$candidate_digest" "$boot_id" >>"$temporary"
+    sync -f "$temporary"
+    mv -- "$temporary" "$attempts"
+    boot_ids+=("$boot_id")
+fi
+
+if [[ ${#boot_ids[@]} -ge 3 ]]; then
+    declare -a units=()
+    for directory in /run/containers/systemd /etc/containers/systemd /usr/share/containers/systemd; do
+        [[ -d $directory ]] || continue
+        while IFS= read -r -d '' quadlet; do
+            unit=${quadlet##*/}
+            units+=("${unit%.container}.service")
+        done < <(find "$directory" -maxdepth 1 -type f -name '*.container' -print0)
+    done
+    if ((${#units[@]} > 0)); then
+        timeout 45 systemctl stop -- "${units[@]}" ||
+            echo "ParticleOS workload unit quarantine timed out; forcing containers down" >&2
+    fi
+    timeout 30 podman stop --all --ignore --time 10 ||
+        timeout 15 podman kill --all >/dev/null 2>&1 || true
+    sync
+    echo "PARTICLEOS_WORKLOAD_QUARANTINED version=$candidate_version attempts=${#boot_ids[@]} status=$probe_status" >&2
     exit 0
 fi
 
-# Leave the candidate unblessed and let systemd-boot consume exactly one of
-# the three configured attempts on each reboot. The unit runs only on counted
-# candidates, so the uncounted known-good fallback never enters this loop.
 sync
-echo "PARTICLEOS_WORKLOAD_CANDIDATE_FAILED status=$probe_status" >&2
+echo "PARTICLEOS_WORKLOAD_CANDIDATE_FAILED version=$candidate_version attempts=${#boot_ids[@]} status=$probe_status" >&2
 exit "$probe_status"

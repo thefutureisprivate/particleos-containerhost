@@ -51,8 +51,12 @@ done
     exit 1
 }
 
-"$repository/scripts/validate-artifacts.sh" "$base_artifacts"
-"$repository/scripts/validate-artifacts.sh" "$candidate_artifacts"
+snapshot_root=$(mktemp -d "$audit_tmpdir/.particleos-artifact-snapshot.XXXXXXXX")
+trap 'rm -rf -- "$snapshot_root"' EXIT
+"$repository/scripts/validate-artifacts.sh" "$base_artifacts" "$snapshot_root/base"
+"$repository/scripts/validate-artifacts.sh" "$candidate_artifacts" "$snapshot_root/candidate"
+base_artifacts=$snapshot_root/base
+candidate_artifacts=$snapshot_root/candidate
 
 find_one() {
     local directory=$1 pattern=$2 description=$3
@@ -107,6 +111,8 @@ root_password=$(printf particleos | base64 -w0)
 firstboot_timezone=$(printf Etc/UTC | base64 -w0)
 health_dropin=$(base64 -w0 "$repository/tests/update-rollback-health.conf")
 health_script=$(base64 -w0 "$repository/tests/update-rollback-health.sh")
+host_failure_dropin=$(base64 -w0 "$repository/tests/update-rollback-host-failure.conf")
+host_failure_script=$(base64 -w0 "$repository/tests/update-rollback-host-failure")
 base_credential=$(printf '%s\n' "$base_version" | base64 -w0)
 candidate_credential=$(printf '%s\n' "$candidate_version" | base64 -w0)
 
@@ -171,6 +177,7 @@ cleanup() {
             $runtime_directory == /tmp/particleos-update-rollback.* ]]; then
         rm -rf -- "$runtime_directory"
     fi
+    rm -rf -- "$snapshot_root"
     if ((status != 0)) && [[ $keep_failed == 1 ]]; then
         echo "Preserved failed update/rollback audit state: $scratch" >&2
     elif [[ -n ${scratch:-} && -d $scratch &&
@@ -195,14 +202,13 @@ extract_usrhash() {
     grep -m1 -oE 'usrhash=[0-9a-f]{64}' "$log" | cut -d= -f2
 }
 
-assert_counted_health_attempt() {
+assert_counted_attempt() {
     local boot_number=$1 tries_left=$2 tries_done=$3 log
     log=$active_state/boot-$boot_number.log
-    grep 'UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT ' "$log"
-    grep 'PARTICLEOS_WORKLOAD_CANDIDATE_FAILED ' "$log"
+    grep -qF "PARTICLEOS_CANDIDATE_ATTEMPT_RECORDED version=$candidate_version count=$tries_done" "$log"
     grep -qF "ParticleOS-Host_${candidate_version}_x86-64+${tries_left}-${tries_done}.efi" "$log"
     [[ $(extract_usrhash "$log") != "$fallback_base_usrhash" ]]
-    echo "UPDATE_ROLLBACK_AUDIT_HEALTH_ATTEMPT attempt=$tries_done tries_left=$tries_left version=$candidate_version"
+    echo "UPDATE_ROLLBACK_AUDIT_COUNTED_ATTEMPT attempt=$tries_done tries_left=$tries_left version=$candidate_version"
 }
 
 run_guest() {
@@ -252,6 +258,7 @@ run_guest() {
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-prune.service~90-particleos-audit=$prune_audit" \
+        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-prune.service~80-particleos-host-failure=$host_failure_dropin" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service" \
         -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script" \
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit=$homed_firstboot_dropin" \
@@ -261,6 +268,7 @@ run_guest() {
         -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-workload-health.service~90-particleos-update-audit=$health_dropin" \
         -smbios "type=11,value=io.systemd.credential.binary:update-rollback-audit=$audit_script" \
         -smbios "type=11,value=io.systemd.credential.binary:update-rollback-health=$health_script" \
+        -smbios "type=11,value=io.systemd.credential.binary:update-rollback-host-failure=$host_failure_script" \
         -smbios "type=11,value=io.systemd.credential.binary:update-audit-scenario=$scenario_credential" \
         -smbios "type=11,value=io.systemd.credential.binary:update-audit-base-version=$base_credential" \
         -smbios "type=11,value=io.systemd.credential.binary:update-audit-candidate-version=$candidate_credential"
@@ -326,21 +334,42 @@ denial_attempt_usrhash=$(extract_usrhash "$active_state/boot-3.log")
 [[ $denial_attempt_usrhash == "$denial_base_usrhash" ]]
 echo 'UPDATE_ROLLBACK_AUDIT_DENIAL_PASS superseded signed UKI could not unlock persistent state'
 
-echo "Testing health-triggered A/B fallback: $candidate_version -> $base_version"
-prepare_scenario health-fallback
-run_guest health-fallback 0 enrollment
-run_guest health-fallback 1 clean
+echo "Testing bounded opt-in workload health: $base_version -> $candidate_version"
+prepare_scenario workload-quarantine
+run_guest workload-quarantine 0 enrollment
+run_guest workload-quarantine 1 clean
 grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 fallback_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
-run_guest health-fallback 2 clean
-assert_counted_health_attempt 2 2 1
-run_guest health-fallback 3 clean
-assert_counted_health_attempt 3 1 2
-run_guest health-fallback 4 clean
-assert_counted_health_attempt 4 0 3
-run_guest health-fallback 5 clean
+run_guest workload-quarantine 2 clean
+assert_counted_attempt 2 2 1
+grep 'PARTICLEOS_WORKLOAD_CANDIDATE_FAILED ' "$active_state/boot-2.log"
+run_guest workload-quarantine 3 clean
+assert_counted_attempt 3 1 2
+grep 'PARTICLEOS_WORKLOAD_CANDIDATE_FAILED ' "$active_state/boot-3.log"
+run_guest workload-quarantine 4 clean
+assert_counted_attempt 4 0 3
+grep 'PARTICLEOS_WORKLOAD_QUARANTINED ' "$active_state/boot-4.log"
+grep 'UPDATE_ROLLBACK_AUDIT_CANDIDATE_BLESSED ' "$active_state/boot-4.log"
+run_guest workload-quarantine 5 denied
+[[ $(extract_usrhash "$active_state/boot-5.log") == "$fallback_base_usrhash" ]]
+echo 'UPDATE_ROLLBACK_AUDIT_WORKLOAD_BOUND_PASS unhealthy workload quarantined and candidate adopted on attempt three'
+
+echo "Testing authenticated three-attempt host fallback: $candidate_version -> $base_version"
+prepare_scenario host-fallback
+run_guest host-fallback 0 enrollment
+run_guest host-fallback 1 clean
+grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
+fallback_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
+for boot_number in 2 3 4; do
+    run_guest host-fallback "$boot_number" clean
+    tries_done=$((boot_number - 1))
+    tries_left=$((3 - tries_done))
+    assert_counted_attempt "$boot_number" "$tries_left" "$tries_done"
+    grep 'UPDATE_ROLLBACK_AUDIT_HOST_FAILURE ' "$active_state/boot-$boot_number.log"
+done
+run_guest host-fallback 5 clean
 grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-5.log"
 grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_CONFIRMED ' "$active_state/boot-5.log"
 [[ $(extract_usrhash "$active_state/boot-5.log") == "$fallback_base_usrhash" ]]
 
-echo 'ParticleOS A/B update, three-attempt health fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'
+echo 'ParticleOS A/B update, bounded workload health, authenticated three-attempt host fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'

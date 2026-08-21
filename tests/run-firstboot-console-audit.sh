@@ -39,7 +39,11 @@ done
     exit 1
 }
 
-"$repository/scripts/validate-artifacts.sh" "$artifact_directory"
+snapshot_root=$(mktemp -d "$audit_tmpdir/.particleos-artifact-snapshot.XXXXXXXX")
+trap 'rm -rf -- "$snapshot_root"' EXIT
+authenticated_artifacts=$snapshot_root/release
+"$repository/scripts/validate-artifacts.sh" "$artifact_directory" "$authenticated_artifacts"
+artifact_directory=$authenticated_artifacts
 mapfile -t compressed_images < <(
     find "$artifact_directory" -maxdepth 1 -type f \
         -name 'ParticleOS-Host_*_x86-64.raw.zst' -print
@@ -87,6 +91,7 @@ cleanup() {
     local status=$?
     ((qemu_active)) && stop_qemu
     stop_tpm
+    rm -rf -- "$snapshot_root"
     if ((status != 0)) && [[ $keep_failed == 1 ]]; then
         echo "Preserved failed first-boot audit state: $scratch" >&2
     elif [[ -n ${scratch:-} && -d $scratch &&

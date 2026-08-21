@@ -11,6 +11,7 @@ enable chronyd.service
 disable chrony-wait.service
 
 enable nftables.service
+enable particleos-network-security.target
 enable particleos-module-preload.service
 enable particleos-module-lockdown.service
 
@@ -28,6 +29,7 @@ enable systemd-sysupdate-reboot.timer
 enable systemd-bless-boot.service
 enable systemd-boot-check-no-failures.service
 enable particleos-pcrlock-enroll.service
+enable particleos-candidate-attempt.service
 enable particleos-pcrlock-fallback-prune.service
 disable particleos-workload-health.service
 enable fstrim.timer

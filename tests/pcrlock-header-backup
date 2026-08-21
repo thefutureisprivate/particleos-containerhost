@@ -1,0 +1,15 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+state=/dev/disk/by-partlabel/ParticleOS-Host-root
+boot_root=$(realpath -e -- "$(bootctl --print-boot-path)")
+backup=$boot_root/pcr7-bootstrap-header
+[[ -b $state && -d $boot_root && ! -L $boot_root ]]
+if [[ ! -e $backup ]]; then
+    /usr/sbin/cryptsetup luksHeaderBackup "$state" \
+        --header-backup-file "$backup"
+    chmod 0600 "$backup"
+    sync -f "$backup"
+    echo "PARTICLEOS_PCR7_HEADER_BACKED_UP path=$backup"
+fi

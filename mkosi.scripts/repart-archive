@@ -6,20 +6,71 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import hashlib
+import io
 import re
-import shutil
+import stat
 import sys
 import tarfile
 
 
-MAX_MEMBERS = 32
 MAX_MEMBER_SIZE = 64 * 1024
 MAX_TOTAL_SIZE = 1024 * 1024
 MAX_ARCHIVE_SIZE = 2 * 1024 * 1024
+EXPECTED_MEMBERS = {
+    "00-esp.conf": "a1941f130985a91f21d10e4d0d30bd9be75fc92d15ff056cf5c7ab140b64bf00",
+    "10-usr-verity-sig.conf": "413be16eacd87d8b37a1aef078ce08b580a49809ac47e307e21021af8a1b81e9",
+    "11-usr-verity.conf": "c0a0f6d807a78f6cf5ff37d9c25a0c458b31b29ada08fbee14ca7ad0c88ecbb3",
+    "12-usr.conf": "5d039d883d709863786904477818ba0d142b712b56a90cb8674e5b09a8e40b3d",
+}
+SIGNATURE_TEMPLATE = b"""# SPDX-License-Identifier: LGPL-2.1-or-later
+
+[Partition]
+Type=usr-verity-sig
+Label=%M_%A_vsig
+Verity=signature
+VerityMatchKey=usr
+SplitName=%t.%U
+"""
 
 
 def fail(message: str) -> "NoReturn":
     raise SystemExit(f"unsafe repart archive: {message}")
+
+
+def read_stable_archive(path: Path) -> bytes:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        fail(f"cannot open archive safely: {error}")
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            fail("archive is not a regular file")
+        if not 1 <= before.st_size <= MAX_ARCHIVE_SIZE:
+            fail(f"archive size {before.st_size} is outside 1..{MAX_ARCHIVE_SIZE}")
+        chunks: list[bytes] = []
+        remaining = MAX_ARCHIVE_SIZE + 1
+        while remaining:
+            chunk = os.read(descriptor, min(128 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        after = os.fstat(descriptor)
+        identity = lambda value: (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+        if identity(before) != identity(after) or len(data) != before.st_size:
+            fail("archive changed while being read")
+        return data
+    finally:
+        os.close(descriptor)
 
 
 def main() -> None:
@@ -29,22 +80,27 @@ def main() -> None:
     # again with the hostile archive and a fresh destination.
     if len(sys.argv) == 1 and os.environ.get("MKOSI_CONFIG"):
         return
-    if len(sys.argv) != 3:
-        raise SystemExit(f"usage: {sys.argv[0]} ARCHIVE DESTINATION")
+    if len(sys.argv) not in {3, 4}:
+        raise SystemExit(f"usage: {sys.argv[0]} ARCHIVE DESTINATION [SIGNATURE_LABEL]")
 
     archive = Path(sys.argv[1])
     destination = Path(sys.argv[2])
-    archive_size = archive.stat().st_size
-    if not 1 <= archive_size <= MAX_ARCHIVE_SIZE:
-        fail(f"archive size {archive_size} is outside 1..{MAX_ARCHIVE_SIZE}")
+    signature_label = sys.argv[3] if len(sys.argv) == 4 else None
+    if signature_label is not None and (
+        len(signature_label) > 36
+        or re.fullmatch(r"ParticleOS-Host_[0-9]+[.][0-9]+[.][0-9]+_vsig", signature_label)
+        is None
+    ):
+        fail("signature label is not the exact versioned ParticleOS label")
+    archive_data = read_stable_archive(archive)
     destination.mkdir(mode=0o700, parents=False, exist_ok=False)
 
     # OBS emits an uncompressed POSIX tar. Refuse alternate codecs so an input
     # cannot consume unbounded work before member limits are evaluated.
-    with tarfile.open(archive, mode="r:") as source:
+    with tarfile.open(fileobj=io.BytesIO(archive_data), mode="r:") as source:
         members = source.getmembers()
-        if not 1 <= len(members) <= MAX_MEMBERS:
-            fail(f"expected 1..{MAX_MEMBERS} members, found {len(members)}")
+        if len(members) != len(EXPECTED_MEMBERS):
+            fail(f"expected {len(EXPECTED_MEMBERS)} members, found {len(members)}")
 
         names: set[str] = set()
         validated: list[tuple[tarfile.TarInfo, str]] = []
@@ -74,18 +130,35 @@ def main() -> None:
                 stream = source.extractfile(member)
                 if stream is None:
                     fail(f"cannot read {member.name!r}")
+                with stream:
+                    data = stream.read(MAX_MEMBER_SIZE + 1)
+                if len(data) != member.size:
+                    fail(f"{member.name!r} changed size while reading")
+                expected_digest = EXPECTED_MEMBERS.get(name)
+                if expected_digest is None:
+                    fail(f"unexpected repart definition {name!r}")
+                if name == "10-usr-verity-sig.conf" and signature_label is not None:
+                    expected_data = SIGNATURE_TEMPLATE.replace(
+                        b"Label=%M_%A_vsig", f"Label={signature_label}".encode()
+                    )
+                    accepted = data == expected_data
+                else:
+                    accepted = hashlib.sha256(data).hexdigest() == expected_digest
+                if not accepted:
+                    fail(f"{name!r} differs from the reviewed template")
                 output_fd = os.open(
                     name,
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                     0o600,
                     dir_fd=destination_fd,
                 )
-                with stream, os.fdopen(output_fd, "wb") as output:
-                    shutil.copyfileobj(stream, output, length=64 * 1024)
-                    if output.tell() != member.size:
-                        fail(f"{member.name!r} changed size while reading")
+                with os.fdopen(output_fd, "wb") as output:
+                    output.write(data)
         finally:
             os.close(destination_fd)
+
+        if names != set(EXPECTED_MEMBERS):
+            fail("repart definition set is incomplete")
 
 
 if __name__ == "__main__":

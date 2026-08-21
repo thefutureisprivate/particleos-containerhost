@@ -40,12 +40,16 @@ if [[ -f $sources/hashes.cpio.rsasign.sig ]]; then
     set -x
 fi
 
-resource_dir="$(/usr/bin/python3 -c '
-from pathlib import Path
-import mkosi.resources
-print(Path(mkosi.resources.__file__).parent / "mkosi-obs")
-')" || gate_fail "cannot locate the upstream mkosi OBS resources"
-upstream_helper="$resource_dir/mkosi.build"
+[[ $(mkosi --version) == 'mkosi 26' ]] || gate_fail "mkosi is not the reviewed stable v26 release"
+mapfile -t upstream_helpers < <(
+    rpm -ql mkosi | grep -E '/mkosi/resources/mkosi-obs/mkosi[.]build$'
+)
+[[ ${#upstream_helpers[@]} -eq 1 ]] || gate_fail "cannot locate exactly one packaged mkosi.build helper"
+upstream_helper=${upstream_helpers[0]}
+expected_upstream_helper_digest=f5a12b2941b8976239ab08a593a2e75f12d0f2ec981abbce88426cd3019d598d
+[[ $(rpm -qf --qf '%{NAME}\n' "$upstream_helper") == mkosi &&
+   $(sha256sum -- "$upstream_helper" | cut -d ' ' -f1) == "$expected_upstream_helper_digest" ]] ||
+    gate_fail "packaged mkosi.build differs from reviewed upstream v26"
 output=/work/src/usr/src/packages/OTHER
 
 [[ -x "$upstream_helper" ]] || {
@@ -144,16 +148,35 @@ done
 # second pass replaces the UKI and raw image, so publish a checksum manifest
 # generated only after every final artifact has been staged.
 checksum_name="${image_id}_${image_version}_x86-64.SHA256SUMS"
-mapfile -d '' artifact_names < <(
+mapfile -d '' actual_artifact_names < <(
     find "$output" -maxdepth 1 -type f \
         -name "${image_id}_${image_version}_x86-64.*" \
         ! -name "$checksum_name" ! -name '*.sha256' ! -name '*.asc' \
         -printf '%f\0' | sort -z
 )
-[[ ${#artifact_names[@]} -ge 8 ]] || {
-    echo "Expected the complete final artifact set, found ${#artifact_names[@]} files" >&2
-    exit 1
-}
+artifact_prefix="${image_id}_${image_version}_x86-64"
+artifact_names=(
+    "$artifact_prefix.efi"
+    "$artifact_prefix.esp.raw.zst"
+    "$artifact_prefix.manifest.gz"
+    "$artifact_prefix.osrelease"
+    "$artifact_prefix.raw.zst"
+    "$artifact_prefix.repart.tar"
+)
+for role in usr-x86-64 usr-x86-64-verity usr-x86-64-verity-sig; do
+    mapfile -t matches < <(
+        find "$output" -maxdepth 1 -type f \
+            -name "$artifact_prefix.$role.*.raw.zst" -printf '%f\n'
+    )
+    [[ ${#matches[@]} -eq 1 &&
+       ${matches[0]} =~ ^${artifact_prefix//./[.]}[.]${role}[.][0-9a-f]{32}[.]raw[.]zst$ ]] ||
+        gate_fail "expected one canonical $role split artifact"
+    artifact_names+=("${matches[0]}")
+done
+mapfile -t artifact_names < <(printf '%s\n' "${artifact_names[@]}" | sort)
+[[ ${#actual_artifact_names[@]} -eq ${#artifact_names[@]} &&
+   $(printf '%s\n' "${actual_artifact_names[@]}") == $(printf '%s\n' "${artifact_names[@]}") ]] ||
+    gate_fail "final artifact set differs from the exact release schema"
 checksum_tmp="$output/.${checksum_name}.tmp"
 (
     cd "$output"

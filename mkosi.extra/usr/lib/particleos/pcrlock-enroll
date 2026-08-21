@@ -32,7 +32,6 @@ enroll_pcrlock() {
         --tpm2-device=auto \
         --tpm2-pcrs= \
         --tpm2-pcrlock=/var/lib/systemd/pcrlock.json \
-        "$@" \
         "$state"
 }
 
@@ -79,10 +78,14 @@ cryptsetup open --type luks2 --test-passphrase --token-only \
 echo "PARTICLEOS_PCRLOCK_NEXT_BOOT_PROVED boot=$current_boot token=$token_id"
 
 # The tested token has now unsealed under the next boot's actual PCR 7+11
-# state. Enroll first and atomically wipe every older TPM2 slot, leaving the
-# newly created pcrlock token as the sole automatic unlock path.
-enroll_pcrlock --wipe-slot=tpm2
+# state. Rotate the effective volume key while authorizing the operation only
+# through that token. A saved bootstrap-era LUKS2 header then wraps an obsolete
+# volume key and cannot decrypt the re-encrypted payload.
+/usr/sbin/cryptsetup reencrypt --batch-mode --token-only \
+    --token-id "$token_id" "$state"
 scan_tokens
 [[ ${#pcrlock_tokens[@]} -eq 1 && ${#bootstrap_tokens[@]} -eq 0 ]]
+/usr/sbin/cryptsetup open --type luks2 --test-passphrase --token-only \
+    --token-id "${pcrlock_tokens[0]}" "$state"
 install -m 0600 /dev/null "$marker"
 rm -f -- "$pending"

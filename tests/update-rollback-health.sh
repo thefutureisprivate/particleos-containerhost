@@ -7,11 +7,12 @@ read -r base_version <"$CREDENTIALS_DIRECTORY/update-audit-base-version"
 # shellcheck source=/dev/null
 source /usr/lib/os-release
 
-[[ $scenario == rollback-denial || $scenario == health-fallback ]]
+[[ $scenario == rollback-denial || $scenario == workload-quarantine ||
+   $scenario == host-fallback ]]
 [[ $base_version =~ ^[0-9]+([.][0-9]+)*$ ]]
 [[ ${IMAGE_VERSION:-} =~ ^[0-9]+([.][0-9]+)*$ ]]
 
-if [[ $scenario == health-fallback ]]; then
+if [[ $scenario == workload-quarantine ]]; then
     echo "UPDATE_ROLLBACK_AUDIT_HEALTH_REJECT version=$IMAGE_VERSION"
     exit 1
 fi
