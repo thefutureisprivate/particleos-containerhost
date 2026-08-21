@@ -386,6 +386,8 @@ require_fixed '&& exit 97 ||' tests/firstboot-console-expect.py 'the console aud
 require_fixed 'run0 --pipe /usr/bin/bash /run/particleos-firstboot-run0-audit' tests/firstboot-console-expect.py 'the native account authenticates run0 on its active console'
 require_fixed '_TRANSPORT=audit' tests/firstboot-console-audit 'the console audit reads kernel audit records from journald'
 require_fixed 'SERVICE_STOP.*unit=polkit-agent-helper@.*res=success' tests/firstboot-console-audit 'the console audit requires successful polkit helper completion'
+require_fixed 'for _ in {1..20}' tests/firstboot-console-audit 'the console audit bounds asynchronous journal indexing retries'
+require_fixed '/usr/bin/sleep 0.25' tests/firstboot-console-audit 'the run0 audit tolerates only a short audit-journal propagation delay'
 require_fixed '==== AUTHENTICATION COMPLETE ====' tests/firstboot-console-expect.py 'the console audit observes interactive authentication completion'
 require_fixed 'ExecStart=/usr/sbin/agetty ' tests/firstboot-console-audit.conf 'the run0 audit creates a real getty, PAM, and logind login session'
 require_fixed 'StandardInput=tty-force' tests/firstboot-console-audit.conf 'the run0 audit owns a real controlling console'

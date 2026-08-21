@@ -64,20 +64,28 @@ fail() {
 }
 
 [[ $(/usr/bin/id -u) == 0 ]] || fail 'run0 did not enter uid 0'
-audit_records=$(/usr/bin/journalctl --boot --no-pager --output=cat \
-    _TRANSPORT=audit 2>/dev/null || true)
+audit_records= authentication= transient_start=
+# The kernel audit multicast and journald's indexed view are asynchronous.
+# Wait only for the two records produced by the already completed Polkit
+# exchange instead of treating an indexing delay as an authorization failure.
+for _ in {1..20}; do
+    audit_records=$(/usr/bin/journalctl --boot --no-pager --output=cat \
+        _TRANSPORT=audit 2>/dev/null || true)
+    authentication=$(/usr/bin/grep -Ei \
+        'SERVICE_STOP.*unit=polkit-agent-helper@.*res=success' \
+        <<<"$audit_records" || true)
+    transient_start=$(/usr/bin/grep -Ei \
+        'SERVICE_START.*unit=run-p[0-9]+-i[0-9]+.*res=success' \
+        <<<"$audit_records" || true)
+    [[ -n $authentication && -n $transient_start ]] && break
+    /usr/bin/sleep 0.25
+done
 avc=$(/usr/bin/grep -Ei 'avc:.*denied.*(homed|homework|fsadm|policykit|run0|login)' \
     <<<"$audit_records" || true)
 [[ -z $avc ]] || {
     printf '%s\n' "$avc"
     fail 'homed, login, or run0 generated an SELinux denial'
 }
-authentication=$(/usr/bin/grep -Ei \
-    'SERVICE_STOP.*unit=polkit-agent-helper@.*res=success' \
-    <<<"$audit_records" || true)
-transient_start=$(/usr/bin/grep -Ei \
-    'SERVICE_START.*unit=run-p[0-9]+-i[0-9]+.*res=success' \
-    <<<"$audit_records" || true)
 [[ -n $authentication && -n $transient_start ]] || {
     /usr/bin/grep -Ei \
         '(polkit-agent-helper|unit=run-p[0-9]+-i[0-9]+|acct="?particleadmin"?)' \
