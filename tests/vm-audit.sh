@@ -94,6 +94,38 @@ if getsebool deny_ptrace 2>/dev/null | grep -q -- '--> on'; then
 else
     fail 'SELinux globally denies ptrace outside explicit policy'
 fi
+if [[ $(sysctl -n fs.protected_hardlinks) == 1 &&
+        $(sysctl -n fs.protected_symlinks) == 1 &&
+        $(sysctl -n kernel.core_uses_pid) == 1 ]]; then
+    pass 'Fedora and systemd supply the inherited link and core PID protections'
+else
+    fail 'Fedora and systemd supply the inherited link and core PID protections'
+fi
+if [[ $(systemctl show --property=DefaultMemoryAccounting --value) == yes &&
+        $(systemctl show --property=DefaultTasksAccounting --value) == yes ]]; then
+    pass 'systemd supplies memory and task accounting by default'
+else
+    fail 'systemd supplies memory and task accounting by default'
+fi
+
+chronyd_pid=$(systemctl show chronyd.service --property=MainPID --value 2>/dev/null || true)
+if [[ $chronyd_pid =~ ^[1-9][0-9]*$ ]] &&
+        grep -qF 'libhardened_malloc.so' "/proc/$chronyd_pid/maps" 2>/dev/null &&
+        grep -qF 'libno_rlimit_as.so' "/proc/$chronyd_pid/maps" 2>/dev/null; then
+    pass 'chronyd inherits hardened_malloc and no_rlimit_as through their native paths'
+else
+    fail 'chronyd inherits hardened_malloc and no_rlimit_as through their native paths'
+fi
+if [[ $(systemctl show chronyd.service --property=LockPersonality --value) == yes &&
+        $(systemctl show chronyd.service --property=MemoryDenyWriteExecute --value) == yes &&
+        $(systemctl show chronyd.service --property=PrivateTmp --value) == yes &&
+        $(systemctl show chronyd.service --property=ProtectSystem --value) == strict &&
+        $(systemctl show chronyd.service --property=RestrictNamespaces --value) == yes &&
+        $(systemctl show chronyd.service --property=RestrictSUIDSGID --value) == yes ]]; then
+    pass 'chronyd inherits Fedora service hardening after the drop-in is trimmed'
+else
+    fail 'chronyd inherits Fedora service hardening after the drop-in is trimmed'
+fi
 
 usr_type=$(findmnt -n -o FSTYPE /usr 2>/dev/null || true)
 usr_options=$(findmnt -n -o OPTIONS /usr 2>/dev/null || true)
@@ -263,18 +295,21 @@ else
 fi
 if PASSWORD="$admin_password" homectl activate "$admin" >/dev/null 2>&1; then
     home_options=$(findmnt -n -o OPTIONS --target "/home/$admin" 2>/dev/null || true)
+    home_filesystem=$(findmnt -n -o FSTYPE --target "/home/$admin" 2>/dev/null || true)
     home_context=$(stat -c '%C' "/home/$admin" 2>/dev/null || true)
     if [[ ,$home_options, == *,nosuid,* && ,$home_options, == *,nodev,* &&
             ,$home_options, == *,noexec,* &&
+            $home_filesystem == btrfs &&
             $home_context == system_u:object_r:user_home_t:s0 ]]; then
-        pass 'the administrator home mounts nosuid,nodev,noexec with its SELinux label'
+        pass 'the administrator home is Btrfs and mounts nosuid,nodev,noexec with its SELinux label'
     else
-        printf 'home options=%q context=%q\n' "$home_options" "$home_context"
-        fail 'the administrator home mounts nosuid,nodev,noexec with its SELinux label'
+        printf 'home filesystem=%q options=%q context=%q\n' \
+            "$home_filesystem" "$home_options" "$home_context"
+        fail 'the administrator home is Btrfs and mounts nosuid,nodev,noexec with its SELinux label'
     fi
     homectl deactivate "$admin" >/dev/null 2>&1 || true
 else
-    fail 'the administrator home mounts nosuid,nodev,noexec with its SELinux label'
+    fail 'the administrator home is Btrfs and mounts nosuid,nodev,noexec with its SELinux label'
 fi
 homed_avc=$(journalctl --boot --no-pager --output=cat _TRANSPORT=audit \
     2>/dev/null |
@@ -292,6 +327,33 @@ else
 fi
 
 check 'host nftables service is active' systemctl is-active --quiet nftables.service
+primary_interface=$(ip -4 route show default 2>/dev/null |
+    sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n1)
+if [[ -n $primary_interface ]] &&
+        networkctl status "$primary_interface" --no-pager 2>/dev/null |
+            grep -qF '/usr/lib/systemd/network/89-ethernet.network'; then
+    pass 'the upstream ParticleOS Ethernet profile owns the primary VM interface'
+else
+    networkctl status "$primary_interface" --no-pager 2>/dev/null || true
+    fail 'the upstream ParticleOS Ethernet profile owns the primary VM interface'
+fi
+if [[ -n $primary_interface &&
+        $(networkctl status "$primary_interface" --no-pager 2>/dev/null |
+            sed -n 's/.*State: \([^ ]*\).*/\1/p' | head -n1) == routable &&
+        $(sysctl -n net.ipv6.conf.all.forwarding) == 1 ]] &&
+        grep -qxF 'IPv6AcceptRA=yes' \
+            /usr/lib/systemd/network/89-ethernet.network.d/40-particleos-dns.conf; then
+    pass 'the upstream Ethernet profile is routable and retains IPv6 RA with forwarding'
+else
+    fail 'the upstream Ethernet profile is routable and retains IPv6 RA with forwarding'
+fi
+if [[ $(systemctl show nftables.service --property=ProtectHome --value) == yes ]] &&
+        grep -qw network-pre.target \
+            <<<"$(systemctl show nftables.service --property=Before --value)"; then
+    pass 'nftables inherits Fedora home protection and network-pre ordering'
+else
+    fail 'nftables inherits Fedora home protection and network-pre ordering'
+fi
 for chain in input forward output; do
     if nft list chain inet particleos_filter "$chain" | grep -q 'policy drop;'; then
         pass "nftables $chain chain is default deny"
@@ -335,6 +397,23 @@ done
 for module in nft_hash nft_limit; do
     if [[ -d /sys/module/$module ]]; then pass "$module loaded before lockdown"; else fail "$module loaded before lockdown"; fi
 done
+if [[ $(sysctl -n net.core.default_qdisc) == fq_codel &&
+        $(sysctl -n net.ipv4.tcp_congestion_control) != bbr &&
+        ! -d /sys/module/sch_fq && ! -d /sys/module/tcp_bbr ]]; then
+    pass 'Fedora transport defaults replace BBR/FQ without preloading their modules'
+else
+    printf 'qdisc=%s congestion=%s sch_fq=%s tcp_bbr=%s\n' \
+        "$(sysctl -n net.core.default_qdisc)" \
+        "$(sysctl -n net.ipv4.tcp_congestion_control)" \
+        "$([[ -d /sys/module/sch_fq ]] && echo loaded || echo absent)" \
+        "$([[ -d /sys/module/tcp_bbr ]] && echo loaded || echo absent)"
+    fail 'Fedora transport defaults replace BBR/FQ without preloading their modules'
+fi
+if ! grep -qE '^pcspkr ' /proc/modules; then
+    pass 'the upstream pc-speaker blacklist remains effective before module lockdown'
+else
+    fail 'the upstream pc-speaker blacklist remains effective before module lockdown'
+fi
 module_preload_after=$(systemctl show particleos-module-preload.service --property=After --value)
 module_preload_before=$(systemctl show particleos-module-preload.service --property=Before --value)
 if systemctl is-active --quiet particleos-module-preload.service &&
@@ -680,6 +759,24 @@ check_grep 'SSH root login is prohibited' '^PermitRootLogin no$' /etc/ssh/sshd_c
 dns_policy=/usr/lib/systemd/resolved.conf.d/40-particleos-dns.conf
 check_grep 'strict DNS-over-TLS is configured' '^DNSOverTLS=yes$' "$dns_policy"
 check_grep 'DNSSEC validation is configured' '^DNSSEC=yes$' "$dns_policy"
+if grep -qF '#Storage=persistent' /usr/lib/systemd/journald.conf &&
+        grep -qF '#Compress=yes' /usr/lib/systemd/journald.conf &&
+        grep -qF '#Seal=yes' /usr/lib/systemd/journald.conf &&
+        grep -qF '#Audit=yes' /usr/lib/systemd/journald.conf &&
+        [[ -d /var/log/journal ]] &&
+        journalctl --boot --no-pager _TRANSPORT=audit >/dev/null 2>&1; then
+    pass 'journald supplies persistent, compressed, sealing-enabled, audit-enabled defaults'
+else
+    fail 'journald supplies persistent, compressed, sealing-enabled, audit-enabled defaults'
+fi
+if grep -qF '#Cache=yes' /usr/lib/systemd/resolved.conf &&
+        grep -qF '#DNSStubListener=yes' /usr/lib/systemd/resolved.conf &&
+        grep -qE '^nameserver 127\.0\.0\.53$' /run/systemd/resolve/stub-resolv.conf &&
+        resolvectl statistics >/dev/null 2>&1; then
+    pass 'resolved supplies its cache and local stub defaults'
+else
+    fail 'resolved supplies its cache and local stub defaults'
+fi
 
 if ((failures == 0)); then
     printf 'PARTICLEOS_VM_AUDIT_PASS checks=%d\n' "$checks"

@@ -1,7 +1,11 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 [Unit]
 ConditionFirstBoot=yes
 ConditionPathIsReadWrite=/etc
+
 DefaultDependencies=no
+
 Before=basic.target
 Conflicts=shutdown.target
 Before=shutdown.target

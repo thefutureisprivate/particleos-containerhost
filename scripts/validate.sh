@@ -224,7 +224,8 @@ require_fixed '--disk-size=1G' "$homed_firstboot_dropin" 'the administrator home
 require_fixed '--auto-resize-mode=off' "$homed_firstboot_dropin" 'the administrator home cannot grow automatically'
 require_fixed '--nosuid=yes --nodev=yes --noexec=yes' "$homed_firstboot_dropin" 'the administrator home has restrictive mount flags'
 require_fixed 'DefaultStorage=luks' mkosi.extra/usr/lib/systemd/homed.conf.d/40-particleos.conf 'homed defaults to LUKS storage'
-require_fixed 'DefaultFileSystemType=btrfs' mkosi.extra/usr/lib/systemd/homed.conf.d/40-particleos.conf 'homed defaults to Btrfs'
+require_fixed '--fs-type=btrfs' "$homed_firstboot_dropin" 'the native administrator home explicitly uses Btrfs'
+reject_fixed 'DefaultFileSystemType=' mkosi.extra/usr/lib/systemd/homed.conf.d/40-particleos.conf 'the systemd Btrfs default is not redundantly overridden'
 require_fixed 'defcontext=system_u:object_r:user_home_t:s0' mkosi.extra/usr/lib/systemd/system/systemd-homed.service.d/40-particleos-selinux.conf 'homed labels unlabeled Btrfs content before PAM enters it'
 reject_fixed 'rootcontext=' mkosi.extra/usr/lib/systemd/system/systemd-homed.service.d/40-particleos-selinux.conf 'homed does not claim an ineffective root-only mount label'
 require_fixed 'sysinit.target.wants/systemd-firstboot.service' mkosi.finalize 'root and timezone checks remain reachable after interruption'
@@ -268,6 +269,108 @@ require_fixed 'DNSSEC=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-partic
 require_fixed 'baseurl=https://download.opensuse.org/repositories/system:/systemd:/stable/Fedora_44/' mkosi.profiles/obs-repos/systemd.repo 'systemd comes from the upstream stable OBS project'
 reject_fixed 'packages built from upstream main' mkosi.profiles/obs-repos/systemd.repo 'the image no longer consumes moving systemd main'
 require_fixed '        binutils' mkosi.conf 'objcopy is present for runtime UKI identity verification'
+
+manager_policy=mkosi.extra/usr/lib/systemd/system.conf.d/40-particleos-hardening.conf
+require_fixed 'DefaultEnvironment="LD_PRELOAD=libno_rlimit_as.so"' "$manager_policy" 'no_rlimit_as remains in the service environment'
+reject_fixed 'libhardened_malloc.so' "$manager_policy" 'hardened_malloc is not redundantly listed in the service environment'
+require_fixed 'libhardened_malloc.so' mkosi.extra/etc/ld.so.preload 'hardened_malloc uses the native global preload path'
+reject_fixed 'DefaultMemoryAccounting=' "$manager_policy" 'systemd owns its memory-accounting default'
+reject_fixed 'DefaultTasksAccounting=' "$manager_policy" 'systemd owns its task-accounting default'
+
+journal_policy=mkosi.extra/usr/lib/systemd/journald.conf.d/40-particleos.conf
+for inherited in Storage= Compress= Seal= MaxLevelKMsg= Audit=; do
+    reject_fixed "$inherited" "$journal_policy" "journald inherits $inherited from systemd"
+done
+resolved_policy=mkosi.extra/usr/lib/systemd/resolved.conf.d/40-particleos-dns.conf
+for inherited in Cache= DNSStubListener=; do
+    reject_fixed "$inherited" "$resolved_policy" "resolved inherits $inherited from systemd"
+done
+
+sysctl_network=mkosi.extra/usr/lib/sysctl.d/60-particleos-network.conf
+for transport_setting in \
+    net.core.default_qdisc \
+    net.ipv4.tcp_congestion_control \
+    net.ipv4.tcp_ecn \
+    net.ipv4.tcp_slow_start_after_idle \
+    net.ipv4.tcp_shrink_window \
+    net.ipv4.tcp_notsent_lowat \
+    net.ipv4.tcp_fin_timeout \
+    net.ipv4.tcp_tw_reuse \
+    net.ipv4.tcp_syn_retries \
+    net.ipv4.tcp_synack_retries \
+    net.ipv4.tcp_retries2 \
+    net.ipv4.tcp_orphan_retries \
+    net.core.rmem_default \
+    net.core.wmem_default; do
+    if grep -qE "^[[:space:]-]*${transport_setting//./[.]}[[:space:]]*=" "$sysctl_network"; then
+        fail "$transport_setting follows Fedora and kernel policy"
+    else
+        pass "$transport_setting follows Fedora and kernel policy"
+    fi
+done
+require_fixed 'net.ipv4.tcp_rfc1337 = 1' "$sysctl_network" 'TIME-WAIT assassination protection remains explicit'
+
+sysctl_hardening=mkosi.extra/usr/lib/sysctl.d/70-particleos-hardening.conf
+reject_fixed 'fs.protected_hardlinks =' "$sysctl_hardening" 'Fedora owns protected-hardlink policy'
+reject_fixed 'fs.protected_symlinks =' "$sysctl_hardening" 'Fedora owns protected-symlink policy'
+reject_fixed 'kernel.core_uses_pid =' "$sysctl_hardening" 'systemd owns the core PID naming default'
+
+for module in sch_fq tcp_bbr; do
+    if grep -qxF "$module" mkosi.extra/usr/lib/particleos/modules.conf; then
+        fail "$module is absent from the fixed pre-lockdown module set"
+    else
+        pass "$module is absent from the fixed pre-lockdown module set"
+    fi
+done
+require_fixed 'blacklist pcspkr' mkosi.extra/usr/lib/modprobe.d/00-pcspkr-blacklist.conf 'the upstream pc-speaker blacklist is restored'
+
+ethernet_profile=mkosi.extra/usr/lib/systemd/network/89-ethernet.network
+if [[ -L $ethernet_profile && $(readlink "$ethernet_profile") == 89-ethernet.network.example ]]; then
+    pass 'networkd uses the upstream ParticleOS Ethernet profile'
+else
+    fail 'networkd uses the upstream ParticleOS Ethernet profile'
+fi
+require_fixed 'IPv6AcceptRA=yes' mkosi.extra/usr/lib/systemd/network/89-ethernet.network.d/40-particleos-dns.conf 'the upstream Ethernet profile retains IPv6 RA while forwarding'
+
+chrony_hardening=mkosi.extra/usr/lib/systemd/system/chronyd.service.d/40-particleos-hardening.conf
+for inherited in \
+    LockPersonality=yes \
+    MemoryDenyWriteExecute=yes \
+    PrivateTmp=yes \
+    ProtectControlGroups=yes \
+    ProtectHome=yes \
+    ProtectHostname=yes \
+    ProtectKernelLogs=yes \
+    ProtectKernelModules=yes \
+    ProtectKernelTunables=yes \
+    ProtectSystem=strict \
+    RestrictNamespaces=yes \
+    RestrictSUIDSGID=yes \
+    SystemCallArchitectures=native; do
+    reject_fixed "$inherited" "$chrony_hardening" "chronyd inherits $inherited from Fedora"
+done
+
+nftables_hardening=mkosi.extra/usr/lib/systemd/system/nftables.service.d/40-particleos-policy.conf
+reject_fixed 'ConditionPathExists=' "$nftables_hardening" 'nftables does not clear a nonexistent vendor condition'
+reject_fixed 'Wants=network-pre.target' "$nftables_hardening" 'nftables inherits its network-pre ordering from Fedora'
+reject_fixed 'Before=network-pre.target' "$nftables_hardening" 'nftables inherits its network-pre placement from Fedora'
+reject_fixed 'ProtectHome=yes' "$nftables_hardening" 'nftables inherits home protection from Fedora'
+
+for runtime_assertion in \
+    'Fedora and systemd supply the inherited link and core PID protections' \
+    'systemd supplies memory and task accounting by default' \
+    'chronyd inherits hardened_malloc and no_rlimit_as through their native paths' \
+    'chronyd inherits Fedora service hardening after the drop-in is trimmed' \
+    'the administrator home is Btrfs and mounts nosuid,nodev,noexec with its SELinux label' \
+    'the upstream ParticleOS Ethernet profile owns the primary VM interface' \
+    'the upstream Ethernet profile is routable and retains IPv6 RA with forwarding' \
+    'nftables inherits Fedora home protection and network-pre ordering' \
+    'Fedora transport defaults replace BBR/FQ without preloading their modules' \
+    'the upstream pc-speaker blacklist remains effective before module lockdown' \
+    'journald supplies persistent, compressed, sealing-enabled, audit-enabled defaults' \
+    'resolved supplies its cache and local stub defaults'; do
+    require_fixed "$runtime_assertion" tests/vm-audit.sh "VM audit verifies $runtime_assertion"
+done
 
 firewall=mkosi.extra/usr/lib/particleos/nftables.conf
 require_fixed 'destroy table inet particleos_filter' "$firewall" 'host firewall reload is atomic and idempotent'

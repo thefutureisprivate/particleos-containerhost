@@ -549,7 +549,8 @@ The enrollment boot retains PCR 7 and reboots. The next boot proves the exact
 PCR 7+11 token before removing bootstrap, then verifies Secure Boot, signed UKI
 and dm-verity, SELinux, IPE, `gvisor_t`, update policy, optional workload
 health, per-bridge firewall tuples, blocked workload DNS, module lockdown, OCI
-default-deny, and administrative runtime modes. It
+default-deny, administrative runtime modes, inherited Fedora/systemd service
+hardening, the upstream Ethernet profile, and the minimized kernel-module set. It
 rejects the fixture under the wrong key, accepts it under the exact trust root,
 runs it through Podman and runsc/systrap, and validates a healthy Quadlet.
 
@@ -558,7 +559,7 @@ unlock and repeats the signed-container path. Every guest and TPM emulator
 stops after success or failure. A successful audit boot prints:
 
 ```text
-PARTICLEOS_VM_AUDIT_PASS checks=94
+PARTICLEOS_VM_AUDIT_PASS checks=105
 ```
 
 Set `VM_AUDIT_KEEP_FAILED=1` to retain a failed guest disk and serial logs for
