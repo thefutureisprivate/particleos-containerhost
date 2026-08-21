@@ -56,12 +56,15 @@ def good_manifest() -> dict[str, object]:
     }
 
 
-def run_case(root: Path, case: str, mutate, accepted: bool) -> None:
+def run_case(root: Path, case: str, mutate, accepted: bool, nested_source: bool = False) -> None:
     source = root / f"{case}-source"
     output = root / f"{case}-output"
-    (source / "mkosi.resources").mkdir(parents=True)
+    repository = source
+    if nested_source:
+        repository /= "usr/src/packages/SOURCES/particleos-containerhost"
+    (repository / "mkosi.resources").mkdir(parents=True)
     output.mkdir()
-    (source / "mkosi.resources" / "systemd-version").write_text(EXPECTED_VERSION + "\n")
+    (repository / "mkosi.resources" / "systemd-version").write_text(EXPECTED_VERSION + "\n")
     document = good_manifest()
     path = output / "ParticleOS-Host_44.86.1_x86-64.manifest.gz"
     mutate(document, path)
@@ -137,6 +140,7 @@ def main() -> None:
         root = Path(temporary)
         for case, mutate, accepted in cases:
             run_case(root, case, mutate, accepted)
+        run_case(root, "obs-source-layout", lambda document, path: None, True, True)
 
     print("exact systemd manifest policy tests passed")
 

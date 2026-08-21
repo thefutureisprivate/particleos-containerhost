@@ -85,7 +85,21 @@ def stable_read(path: Path, limit: int) -> bytes:
 
 
 def read_expected_version(source: Path) -> str:
-    path = source / "mkosi.resources" / "systemd-version"
+    relative = Path("mkosi.resources") / "systemd-version"
+    candidates = (
+        source / relative,
+        source
+        / "usr"
+        / "src"
+        / "packages"
+        / "SOURCES"
+        / "particleos-containerhost"
+        / relative,
+    )
+    matches = [path for path in candidates if path.exists() or path.is_symlink()]
+    if len(matches) != 1:
+        fail(f"expected one reviewed systemd version file, found {len(matches)}")
+    path = matches[0]
     try:
         value = stable_read(path, 256).decode("ascii").strip()
     except UnicodeDecodeError:
