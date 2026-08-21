@@ -1,0 +1,11 @@
+%if "%_repository" == "fedora_44_images"
+Release: 44.<CI_CNT>.<B_CNT>
+Type: mkosi
+Repotype: checksumsfile:rawsig staticlinks
+Patterntype: none
+FileProvides: /usr/sbin/useradd shadow-utils
+# Fedora's su PAM stack references modules shipped in pam and systemd-pam. The
+# OBS build VM must contain them before it can switch to the build user.
+VMinstall: cpio distribution-gpg-keys dnf5 dosfstools efitools erofs-utils jq mtools nss-tools openssl pam pesign sbsigntools systemd-boot systemd-pam systemd-udev systemd-ukify tar zstd
+Prefer: systemd-boot
+%endif

@@ -386,6 +386,11 @@ commit. `scripts/validate.sh` is enforced by GitHub CI and again inside the OBS
 build wrapper before either publication pass. OBS performs the final Secure
 Boot, UKI, and verity signing steps only after that gate passes.
 
+OBS versions every image as `<Fedora release>.<source revision>.<rebuild>`, for
+example `44.85.1`. The Fedora prefix makes the userspace generation explicit;
+the source and rebuild counters keep every signed image identity unique and
+monotonically ordered for systemd-sysupdate and rollback protection.
+
 ## Installation and Provisioning
 
 Obtain the image and its companion signature files through an authenticated
