@@ -333,6 +333,7 @@ fi
 require_fixed 'IPv6AcceptRA=yes' mkosi.extra/usr/lib/systemd/network/89-ethernet.network.d/40-particleos-dns.conf 'the upstream Ethernet profile retains IPv6 RA while forwarding'
 
 chrony_hardening=mkosi.extra/usr/lib/systemd/system/chronyd.service.d/40-particleos-hardening.conf
+reject_fixed 'ProtectClock=yes' "$chrony_hardening" 'chronyd retains CAP_SYS_TIME for clock synchronization'
 for inherited in \
     LockPersonality=yes \
     MemoryDenyWriteExecute=yes \
@@ -360,7 +361,7 @@ for runtime_assertion in \
     'Fedora and systemd supply the inherited link and core PID protections' \
     'systemd supplies memory and task accounting by default' \
     'chronyd inherits hardened_malloc and no_rlimit_as through their native paths' \
-    'chronyd inherits Fedora service hardening after the drop-in is trimmed' \
+    'chronyd inherits Fedora service hardening while retaining CAP_SYS_TIME' \
     'the administrator home is Btrfs and mounts nosuid,nodev,noexec with its SELinux label' \
     'the upstream ParticleOS Ethernet profile owns the primary VM interface' \
     'the upstream Ethernet profile is routable and retains IPv6 RA with forwarding' \

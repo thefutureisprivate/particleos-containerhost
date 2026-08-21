@@ -115,16 +115,25 @@ if [[ $chronyd_pid =~ ^[1-9][0-9]*$ ]] &&
     pass 'chronyd inherits hardened_malloc and no_rlimit_as through their native paths'
 else
     fail 'chronyd inherits hardened_malloc and no_rlimit_as through their native paths'
+    systemctl --no-pager --full status chronyd.service 2>&1 || true
+    journalctl --boot --no-pager --output=short-monotonic \
+        -u chronyd.service -n 80 2>&1 || true
 fi
-if [[ $(systemctl show chronyd.service --property=LockPersonality --value) == yes &&
+chronyd_capabilities=$(systemctl show chronyd.service --property=CapabilityBoundingSet --value)
+if [[ $(systemctl show chronyd.service --property=ProtectClock --value) == no &&
+        $chronyd_capabilities == *CAP_SYS_TIME* &&
+        $(systemctl show chronyd.service --property=LockPersonality --value) == yes &&
         $(systemctl show chronyd.service --property=MemoryDenyWriteExecute --value) == yes &&
         $(systemctl show chronyd.service --property=PrivateTmp --value) == yes &&
         $(systemctl show chronyd.service --property=ProtectSystem --value) == strict &&
         $(systemctl show chronyd.service --property=RestrictNamespaces --value) == yes &&
         $(systemctl show chronyd.service --property=RestrictSUIDSGID --value) == yes ]]; then
-    pass 'chronyd inherits Fedora service hardening after the drop-in is trimmed'
+    pass 'chronyd inherits Fedora service hardening while retaining CAP_SYS_TIME'
 else
-    fail 'chronyd inherits Fedora service hardening after the drop-in is trimmed'
+    printf 'ProtectClock=%s CapabilityBoundingSet=%s\n' \
+        "$(systemctl show chronyd.service --property=ProtectClock --value)" \
+        "$chronyd_capabilities"
+    fail 'chronyd inherits Fedora service hardening while retaining CAP_SYS_TIME'
 fi
 
 usr_type=$(findmnt -n -o FSTYPE /usr 2>/dev/null || true)
