@@ -2,20 +2,20 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
-    echo "usage: $0 ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS [OVMF_CODE]" >&2
+if [[ $# -ne 2 ]]; then
+    echo "usage: $0 ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS" >&2
     exit 2
 fi
 
 repository=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=tests/lib/mkosi-vm.sh
+source "$repository/tests/lib/mkosi-vm.sh"
 artifact_directory=$(realpath "$1")
 ovmf_vars_source=$(realpath "$2")
-ovmf_code=${3:-/usr/share/qemu/ovmf-x86_64-smm-code.bin}
-ovmf_code=$(realpath "$ovmf_code")
 audit_timeout=${HOMED_SSH_VM_TIMEOUT:-300}
 audit_tmpdir=${HOMED_SSH_VM_TMPDIR:-$artifact_directory}
 keep_failed=${HOMED_SSH_VM_KEEP_FAILED:-0}
-vm_display=${HOMED_SSH_VM_DISPLAY:-gtk}
+vm_display=${HOMED_SSH_VM_DISPLAY:-gui}
 
 [[ $audit_timeout =~ ^[1-9][0-9]*$ ]] || {
     echo 'HOMED_SSH_VM_TIMEOUT must be a positive number of seconds' >&2
@@ -25,15 +25,17 @@ vm_display=${HOMED_SSH_VM_DISPLAY:-gtk}
     echo 'HOMED_SSH_VM_KEEP_FAILED must be 0 or 1' >&2
     exit 2
 }
-[[ $vm_display == none || $vm_display == gtk ]] || {
-    echo 'HOMED_SSH_VM_DISPLAY must be none or gtk' >&2
-    exit 2
-}
-[[ -r /dev/kvm && -w /dev/kvm ]] || { echo '/dev/kvm is unavailable' >&2; exit 1; }
-for command in awk base64 cp find grep mktemp python3 qemu-system-x86_64 \
-        realpath seq ssh ssh-keygen swtpm tail timeout tr truncate zstd; do
+vm_console=$(mkosi_vm_console "$vm_display")
+mkosi_vm_require
+for command in cp find grep install mktemp realpath ss ssh ssh-keygen tail \
+        timeout truncate zstd; do
     command -v "$command" >/dev/null || { echo "missing required command: $command" >&2; exit 1; }
 done
+[[ -f $ovmf_vars_source ]] || { echo "missing OVMF variable store: $ovmf_vars_source" >&2; exit 1; }
+[[ -d $audit_tmpdir && -w $audit_tmpdir ]] || {
+    echo "homed SSH audit directory is not writable: $audit_tmpdir" >&2
+    exit 1
+}
 
 snapshot_root=$(mktemp -d "$audit_tmpdir/.particleos-artifact-snapshot.XXXXXXXX")
 trap 'rm -rf -- "$snapshot_root"' EXIT
@@ -51,55 +53,15 @@ mapfile -t compressed_images < <(
 
 scratch=$(mktemp -d "$audit_tmpdir/.particleos-homed-ssh-audit.XXXXXXXX")
 socket_directory=$(mktemp -d /tmp/phs.XXXXXXXX)
-qemu_pid=
+mkosi_pid=
 swtpm_pid_file=$scratch/swtpm.pid
-
-stop_qemu() {
-    local command_line=
-    local process_state=
-    [[ $qemu_pid =~ ^[1-9][0-9]*$ && -r /proc/$qemu_pid/cmdline ]] || return 0
-    command_line=$(tr '\0' ' ' <"/proc/$qemu_pid/cmdline")
-    [[ $command_line == *"$scratch/"* ]] || return 0
-    kill "$qemu_pid" 2>/dev/null || true
-    for _ in {1..30}; do
-        [[ ! -e /proc/$qemu_pid ]] && return 0
-        process_state=$(awk '$1 == "State:" { print $2 }' "/proc/$qemu_pid/status") || return 0
-        [[ $process_state == Z ]] && return 0
-        sleep 0.1
-    done
-    kill -KILL "$qemu_pid" 2>/dev/null || true
-}
-
-reap_qemu() {
-    [[ $qemu_pid =~ ^[1-9][0-9]*$ ]] || return 0
-    wait "$qemu_pid" 2>/dev/null || true
-    qemu_pid=
-}
-
-stop_tpm() {
-    local command_line=
-    local pid=
-    if [[ -s $swtpm_pid_file ]]; then
-        read -r pid <"$swtpm_pid_file" || true
-    fi
-    [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/cmdline ]] || return 0
-    command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline")
-    [[ $command_line == *"$scratch/"* ]] || return 0
-    kill "$pid" 2>/dev/null || true
-    for _ in {1..20}; do
-        [[ ! -e /proc/$pid ]] && return 0
-        sleep 0.1
-    done
-    if [[ -r /proc/$pid/comm && $(<"/proc/$pid/comm") == swtpm ]]; then
-        kill -KILL "$pid" 2>/dev/null || true
-    fi
-}
+active_machine=
 
 cleanup() {
     local status=$?
-    stop_qemu
-    reap_qemu
-    stop_tpm
+    mkosi_vm_stop "${mkosi_pid:-0}" "$scratch" "${active_machine:-particleos-homed-ssh-audit}"
+    [[ -z ${mkosi_pid:-} ]] || wait "$mkosi_pid" 2>/dev/null || true
+    mkosi_vm_stop_tpm "$swtpm_pid_file" "$scratch"
     rm -rf -- "$snapshot_root"
     if [[ -n ${socket_directory:-} && -d $socket_directory &&
             ${socket_directory##*/} == phs.* ]]; then
@@ -119,65 +81,62 @@ disk=$scratch/particleos.raw
 ovmf_vars=$scratch/ovmf-vars.bin
 tpm_state=$scratch/tpm
 log=$scratch/boot.log
-mkdir -m 0700 "$tpm_state"
+credentials=$scratch/credentials
+mkdir -m 0700 "$tpm_state" "$credentials"
 cp --reflink=auto --sparse=always "$ovmf_vars_source" "$ovmf_vars"
 zstd --sparse -q -d -f -o "$disk" "${compressed_images[0]}"
 truncate -s 16G "$disk"
 ssh-keygen -q -t ed25519 -N '' -f "$scratch/id_ed25519"
+install -m 0600 "$repository/tests/homed-ssh-firstboot-audit.conf" "$credentials/systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit"
+install -m 0600 "$repository/tests/homed-ssh-firstboot-audit" "$credentials/homed-ssh-firstboot-audit"
+install -m 0600 "$scratch/id_ed25519.pub" "$credentials/homed-ssh-authorized-key"
+install -m 0600 "$repository/tests/pcrlock-enroll-audit.conf" "$credentials/systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit"
+printf '%s' particleos >"$credentials/passwd.plaintext-password.root"
+printf '%s' Etc/UTC >"$credentials/firstboot.timezone"
+chmod 0600 "$credentials/passwd.plaintext-password.root" "$credentials/firstboot.timezone"
 
-homed_dropin=$(base64 -w0 "$repository/tests/homed-ssh-firstboot-audit.conf")
-homed_audit=$(base64 -w0 "$repository/tests/homed-ssh-firstboot-audit")
-authorized_key=$(base64 -w0 "$scratch/id_ed25519.pub")
-pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
-root_password=$(printf particleos | base64 -w0)
-firstboot_timezone=$(printf Etc/UTC | base64 -w0)
-ssh_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
-
-start_tpm() {
-    local socket=$1
-    rm -f -- "$swtpm_pid_file"
-    swtpm socket --tpm2 --tpmstate "dir=$tpm_state" \
-        --ctrl "type=unixio,path=$socket" --pid "file=$swtpm_pid_file" \
-        --log "file=$scratch/swtpm.log" --daemon --terminate
+pick_tcp_port() {
+    local candidate
+    for _ in {1..200}; do
+        candidate=$((20000 + RANDOM % 30000))
+        if ! ss -H -ltn "sport = :$candidate" | grep -q .; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    echo 'could not select an unused local SSH port' >&2
+    return 1
 }
 
-qemu_arguments=(
-    -name "particleos-homed-ssh-audit-$$"
-    -machine 'q35,smm=on,accel=kvm'
-    -cpu host
-    -m 2048
-    -smp 2
-    -global 'driver=cfi.pflash01,property=secure,value=on'
-    -drive "if=pflash,format=raw,unit=0,readonly=on,file=$ovmf_code"
-    -drive "if=pflash,format=raw,unit=1,file=$ovmf_vars"
-    -drive "if=virtio,format=raw,file=$disk"
-    -device 'tpm-tis,tpmdev=tpm0'
-    -device 'virtio-net-pci,netdev=net0'
-    -display "$vm_display"
-    -serial "file:$log"
-    -monitor none
-    -smbios 'type=11,value=io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service'
-    -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit=$homed_dropin"
-    -smbios "type=11,value=io.systemd.credential.binary:homed-ssh-firstboot-audit=$homed_audit"
-    -smbios "type=11,value=io.systemd.credential.binary:homed-ssh-authorized-key=$authorized_key"
-    -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit"
-    -smbios "type=11,value=io.systemd.credential.binary:passwd.plaintext-password.root=$root_password"
-    -smbios "type=11,value=io.systemd.credential.binary:firstboot.timezone=$firstboot_timezone"
-)
+start_guest() {
+    local boot=$1 socket=$2 serial=$3
+    shift 3
+    active_machine="particleos-homed-ssh-audit-$$-$boot"
+    mkosi_vm_start_tpm "$tpm_state" "$socket" "$swtpm_pid_file" "$scratch/swtpm-$boot.log"
+    mkosi_vm_build_command "$repository" "$disk" "$ovmf_vars" "$active_machine" \
+        "$vm_console" "$credentials" 'systemd.mask=serial-getty@ttyS0.service' \
+        "$socket" "$serial" "$@"
+}
 
+ssh_port=$(pick_tcp_port)
 echo 'Staging the PCR 7+11 policy before provisioning the homed account...'
 tpm_socket=$socket_directory/enroll.sock
-start_tpm "$tpm_socket"
-if ! timeout --foreground --signal=TERM --kill-after=15s "$audit_timeout" \
-        qemu-system-x86_64 "${qemu_arguments[@]}" \
-        -chardev "socket,id=chrtpm,path=$tpm_socket" \
-        -tpmdev emulator,id=tpm0,chardev=chrtpm \
-        -netdev user,id=net0 -no-reboot; then
+start_guest enroll "$tpm_socket" "file:$log" \
+    -netdev user,id=net0 \
+    -device virtio-net-pci,netdev=net0 \
+    -no-reboot
+set +e
+timeout --foreground --signal=TERM --kill-after=15s "$audit_timeout" \
+    "${MKOSI_VM_COMMAND[@]}"
+status=$?
+set -e
+mkosi_vm_stop 0 "$scratch" "$active_machine"
+mkosi_vm_stop_tpm "$swtpm_pid_file" "$scratch"
+if ((status != 0)); then
     tail -200 "$log" >&2 || true
-    echo 'homed SSH enrollment boot did not stop cleanly' >&2
+    echo 'homed SSH enrollment mkosi VM did not stop cleanly' >&2
     exit 1
 fi
-stop_tpm
 grep -q 'PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED ' "$log" || {
     tail -200 "$log" >&2
     echo 'PCR policy enrollment did not stage' >&2
@@ -187,28 +146,29 @@ grep -q 'PARTICLEOS_PCRLOCK_BOOTSTRAP_STAGED ' "$log" || {
 echo 'Booting with an inactive homed account and key-only SSH enabled...'
 : >"$log"
 tpm_socket=$socket_directory/ssh.sock
-start_tpm "$tpm_socket"
-qemu-system-x86_64 "${qemu_arguments[@]}" \
-    -chardev "socket,id=chrtpm,path=$tpm_socket" \
-    -tpmdev emulator,id=tpm0,chardev=chrtpm \
-    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" &
-qemu_pid=$!
+start_guest ssh "$tpm_socket" "file:$log" \
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
+    -device virtio-net-pci,netdev=net0
+"${MKOSI_VM_COMMAND[@]}" >"$scratch/mkosi-ssh.log" 2>&1 &
+mkosi_pid=$!
 
-for _ in $(seq 1 "$audit_timeout"); do
+for ((attempt = 0; attempt < audit_timeout; attempt++)); do
     grep -q '^PARTICLEOS_HOMED_SSH_READY user=particleadmin state=inactive' "$log" 2>/dev/null && break
-    [[ -e /proc/$qemu_pid ]] || break
+    [[ -e /proc/$mkosi_pid ]] || break
     sleep 1
 done
 grep -q '^PARTICLEOS_HOMED_SSH_READY user=particleadmin state=inactive' "$log" || {
     tail -240 "$log" >&2 || true
+    tail -120 "$scratch/mkosi-ssh.log" >&2 || true
     echo 'guest did not expose an inactive homed account over SSH' >&2
     exit 1
 }
 
-"$repository/tests/homed-ssh-expect.py" "$ssh_port" "$scratch/id_ed25519" \
+"$repository/tests/homed-ssh-expect.sh" "$ssh_port" "$scratch/id_ed25519" \
     'ParticleOS-Test-SSH-261!'
 
-stop_qemu
-reap_qemu
-stop_tpm
-echo 'ParticleOS homed SSH unlock audit passed; the guest and TPM emulator are stopped.'
+mkosi_vm_stop "$mkosi_pid" "$scratch" "$active_machine"
+wait "$mkosi_pid" 2>/dev/null || true
+mkosi_pid=
+mkosi_vm_stop_tpm "$swtpm_pid_file" "$scratch"
+echo 'ParticleOS homed SSH unlock audit passed via mkosi VM; the guest and TPM emulator are stopped.'

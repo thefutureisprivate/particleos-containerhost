@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 failures=0
 
-for command in find grep python3 rg sed shellcheck; do
+for command in find grep jq python3 rg sed shellcheck xmllint; do
     command -v "$command" >/dev/null || {
         printf 'missing required validation command: %s\n' "$command" >&2
         exit 2
@@ -185,13 +185,12 @@ require_fixed 'short-name-mode = "enforcing"' mkosi.extra/etc/containers/registr
 require_fixed 'unqualified-search-registries = []' mkosi.extra/etc/containers/registries.conf 'unqualified registry search is disabled'
 require_fixed 'use-sigstore-attachments: true' mkosi.extra/etc/containers/registries.d/00-particleos.yaml 'sigstore attachment discovery is enabled'
 
-python3 - <<'PY' || failures=$((failures + 1))
-import json
-from pathlib import Path
-p = json.loads(Path('mkosi.extra/etc/containers/policy.json').read_text())
-assert p == {'default': [{'type': 'reject'}], 'transports': {}}
-print('ok - OCI image policy is an exact default deny')
-PY
+if [[ $(jq -cS . mkosi.extra/etc/containers/policy.json) == \
+        '{"default":[{"type":"reject"}],"transports":{}}' ]]; then
+    pass 'OCI image policy is an exact default deny'
+else
+    fail 'OCI image policy is an exact default deny'
+fi
 if ! grep -Rqs 'insecureAcceptAnything' mkosi.extra/etc/containers; then
     pass 'no insecure OCI image-policy exception exists'
 else
@@ -524,47 +523,74 @@ require_fixed 'run_boot 1 enrollment' tests/run-vm-audit.sh 'VM runner stages PC
 require_fixed 'PARTICLEOS_PCRLOCK_BOOTSTRAP_REBOOT_QUEUED ' tests/run-vm-audit.sh 'VM runner requires the enrollment proof reboot transaction'
 require_fixed 'run_boot 2 audit' tests/run-vm-audit.sh 'VM runner proves the PCR7+11 token on a later boot'
 require_fixed 'run_boot 3 audit' tests/run-vm-audit.sh 'VM runner audits persistent TPM unlock'
-require_fixed 'stop_tpm' tests/run-vm-audit.sh 'VM runner stops its TPM emulator after every boot'
+require_fixed 'mkosi_vm_stop_tpm' tests/run-vm-audit.sh 'VM runner stops its TPM emulator after every boot'
 require_fixed 'zstd --sparse' tests/run-vm-audit.sh 'VM runner preserves sparse disk allocation'
 require_fixed 'VM_AUDIT_KEEP_FAILED' tests/run-vm-audit.sh 'VM runner can preserve failed diagnostics without leaving processes running'
-require_fixed 'VM_AUDIT_DISPLAY must be none or gtk' tests/run-vm-audit.sh 'VM runner exposes an explicit local GTK display mode'
-require_fixed 'VM_UPDATE_AUDIT_DISPLAY must be none or gtk' tests/run-update-rollback-audit.sh 'update runner exposes an explicit local GTK display mode'
-require_fixed 'FIRSTBOOT_VM_DISPLAY must be none or gtk' tests/run-firstboot-console-audit.sh 'native firstboot runner exposes a visible GTK display by default'
-require_fixed 'FIRSTBOOT_QMP_SOCKET=' tests/run-firstboot-console-audit.sh 'native firstboot automation controls the visible VGA console through QMP'
-require_fixed 'screendump' tests/firstboot-console-expect.py 'native firstboot OCR reads the actual VGA framebuffer'
-require_fixed 'input-send-event' tests/firstboot-console-expect.py 'native firstboot answers prompts through the VGA keyboard path'
-require_fixed 'tesseract' tests/firstboot-console-expect.py 'native firstboot verifies visible prompt text with OCR'
+require_fixed 'VM_AUDIT_DISPLAY' tests/run-vm-audit.sh 'VM runner exposes an explicit local mkosi display mode'
+require_fixed 'VM_UPDATE_AUDIT_DISPLAY' tests/run-update-rollback-audit.sh 'update runner exposes an explicit local mkosi display mode'
+require_fixed 'mkosi_vm_build_command' tests/run-firstboot-console-audit.sh 'native firstboot runner launches through mkosi VM'
+require_fixed 'qmp_socket=' tests/run-firstboot-console-audit.sh 'native firstboot automation controls the visible VGA console through QMP'
+require_fixed 'screendump' tests/run-firstboot-console-audit.sh 'native firstboot OCR reads the actual VGA framebuffer'
+require_fixed 'input-send-event' tests/run-firstboot-console-audit.sh 'native firstboot answers prompts through the VGA keyboard path'
+require_fixed 'tesseract' tests/run-firstboot-console-audit.sh 'native firstboot verifies visible prompt text with OCR'
 reject_fixed 'systemd.unit-dropin.systemd-firstboot.service~90-particleos-serial' tests/run-firstboot-console-audit.sh 'native root and timezone setup is not redirected away from VGA'
 reject_fixed 'systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-serial' tests/run-firstboot-console-audit.sh 'native user setup is not redirected away from VGA'
 reject_fixed 'systemd.mask=particleos-pcrlock-enroll.service' tests/run-firstboot-console-audit.sh 'the prompt audit includes the real rollback enrollment reboot'
-require_fixed '"enter the new root password", "empty to skip"' tests/firstboot-console-expect.py 'the VGA audit sees and answers the recovery root password first'
-require_fixed '"enter the new timezone", "name or number"' tests/firstboot-console-expect.py 'the VGA audit sees and answers timezone second'
-require_fixed '"enter user name", "create"' tests/firstboot-console-expect.py 'the VGA audit sees and answers the native homed username third'
-require_fixed '"enter new password", "particleadmin", "repeat"' tests/firstboot-console-expect.py 'the VGA audit sees and answers the homed password last'
-require_fixed 'FIRSTBOOT_VGA_PROMPT_VISIBLE' tests/firstboot-console-expect.py 'the VGA audit reports every visually recognized setup prompt'
-require_fixed 'SYSTEMD_BOOT_FIRMWARE_ENTRY_VISIBLE' tests/firstboot-console-expect.py 'the VGA audit proves the firmware entry is actually rendered'
+require_fixed "'enter the new root password'" tests/run-firstboot-console-audit.sh 'the VGA audit sees and answers the recovery root password first'
+require_fixed "'enter the new timezone'" tests/run-firstboot-console-audit.sh 'the VGA audit sees and answers timezone second'
+require_fixed "'enter user name'" tests/run-firstboot-console-audit.sh 'the VGA audit sees and answers the native homed username third'
+require_fixed "'enter new password'" tests/run-firstboot-console-audit.sh 'the VGA audit sees and answers the homed password last'
+require_fixed 'FIRSTBOOT_VGA_PROMPT_VISIBLE' tests/run-firstboot-console-audit.sh 'the VGA audit reports every visually recognized setup prompt'
+require_fixed 'SYSTEMD_BOOT_FIRMWARE_ENTRY_VISIBLE' tests/run-firstboot-console-audit.sh 'the VGA audit proves the firmware entry is actually rendered'
+require_fixed 'MKOSI_VM_COMMAND=(' tests/lib/mkosi-vm.sh 'local guests are composed through one shared mkosi VM command'
+require_fixed '        vm --' tests/lib/mkosi-vm.sh 'the shared launcher invokes the mkosi VM verb'
+require_fixed '--ephemeral=no' tests/lib/mkosi-vm.sh 'mkosi preserves the caller-owned multi-boot disk'
+require_fixed '--tools-tree=' tests/lib/mkosi-vm.sh 'local VM tests use the installed runtime rather than rebuilding build-only tools'
+require_fixed '--dependency=' tests/lib/mkosi-vm.sh 'local VM tests boot the authenticated disk without rebuilding image dependencies'
+require_fixed '--bootable=no' tests/lib/mkosi-vm.sh 'runtime-only mkosi invocation does not regenerate the published boot payload'
+require_fixed '--sandbox-tree=' tests/lib/mkosi-vm.sh 'local VM tests do not stage build-only repository trees'
+require_fixed '--secure-boot=no' tests/lib/mkosi-vm.sh 'runtime-only mkosi invocation does not attempt to re-sign the authenticated image'
+require_fixed '--firmware=uefi-secure-boot' tests/lib/mkosi-vm.sh 'mkosi selects Secure Boot firmware explicitly'
+require_fixed '--credential=' tests/lib/mkosi-vm.sh 'mkosi resets inherited credentials before adding audit credentials'
+require_fixed "[[ \$(mkosi --version) == 'mkosi 26' ]]" tests/lib/mkosi-vm.sh 'local VM execution rejects an unreviewed mkosi release'
+# shellcheck disable=SC2016
+require_fixed '--extra-search-path "$repository/tests/libexec/mkosi-vm"' tests/lib/mkosi-vm.sh 'mkosi discovers only the repository-scoped compatibility wrapper'
+require_fixed 'console=ttyS0,115200' tests/lib/mkosi-vm.sh 'all VM audits capture one authoritative serial console'
+# shellcheck disable=SC2016
+require_fixed '-particleos-test-firmware-variables "$firmware_variables"' tests/lib/mkosi-vm.sh 'mkosi receives the caller-owned multi-boot firmware store marker'
+require_fixed 'mkosi-ovmf-vars-*' tests/libexec/mkosi-vm/qemu-system-x86_64 'the wrapper recognizes only mkosi temporary OVMF pflash storage'
+require_fixed '((replaced == 1))' tests/libexec/mkosi-vm/qemu-system-x86_64 'the wrapper requires exactly one firmware-variable substitution'
+require_fixed 'persistent_firmware_variables == /*' tests/libexec/mkosi-vm/qemu-system-x86_64 'the persistent firmware-variable path must be absolute'
+require_fixed 'arguments[index + 1]=gtk,gl=off' tests/libexec/mkosi-vm/qemu-system-x86_64 'visible VM tests use the stable local GTK display backend'
+# shellcheck disable=SC2016
+require_fixed 'exec /usr/bin/qemu-system-x86_64 "${arguments[@]}"' tests/libexec/mkosi-vm/qemu-system-x86_64 'the wrapper preserves array-safe QEMU argument boundaries'
+for runner in tests/run-vm-audit.sh tests/run-firstboot-console-audit.sh tests/run-homed-ssh-audit.sh tests/run-update-rollback-audit.sh; do
+    reject_fixed 'qemu-system-x86_64' "$runner" "${runner##*/} never launches QEMU directly"
+    require_fixed 'mkosi_vm_build_command' "$runner" "${runner##*/} launches through mkosi VM"
+    reject_fixed ' console=' "$runner" "${runner##*/} cannot split audit output across another kernel console"
+done
 require_fixed "readonly password='VgaAdmin261Secure'" tests/firstboot-console-audit 'the guest audit uses the VGA-provisioned administrator password'
-require_fixed 'PARTICLEOS_ADMIN_SHELL_READY' tests/firstboot-console-expect.py 'the prompt audit waits for an authenticated homed login shell'
-require_fixed 'run0 --no-ask-password --pipe /usr/bin/true' tests/firstboot-console-expect.py 'the console audit rejects unauthenticated run0 elevation'
-require_fixed '&& exit 97 ||' tests/firstboot-console-expect.py 'the console audit aborts before authenticated run0 if unauthenticated elevation succeeds'
-require_fixed 'run0 --pipe /usr/bin/bash /run/particleos-firstboot-run0-audit' tests/firstboot-console-expect.py 'the native account authenticates run0 on its active console'
+require_fixed 'PARTICLEOS_ADMIN_SHELL_READY' tests/run-firstboot-console-audit.sh 'the prompt audit waits for an authenticated homed login shell'
+require_fixed 'run0 --no-ask-password --pipe /usr/bin/true' tests/run-firstboot-console-audit.sh 'the console audit rejects unauthenticated run0 elevation'
+require_fixed '&& exit 97 ||' tests/run-firstboot-console-audit.sh 'the console audit aborts before authenticated run0 if unauthenticated elevation succeeds'
+require_fixed 'run0 --pipe /usr/bin/bash /run/particleos-firstboot-run0-audit' tests/run-firstboot-console-audit.sh 'the native account authenticates run0 on its active console'
 require_fixed '_TRANSPORT=audit' tests/firstboot-console-audit 'the console audit reads kernel audit records from journald'
 require_fixed 'SERVICE_STOP.*unit=polkit-agent-helper@.*res=success' tests/firstboot-console-audit 'the console audit requires successful polkit helper completion'
 require_fixed 'for _ in {1..20}' tests/firstboot-console-audit 'the console audit bounds asynchronous journal indexing retries'
 require_fixed '/usr/bin/sleep 0.25' tests/firstboot-console-audit 'the run0 audit tolerates only a short audit-journal propagation delay'
-require_fixed '==== AUTHENTICATION COMPLETE ====' tests/firstboot-console-expect.py 'the console audit observes interactive authentication completion'
+require_fixed '==== AUTHENTICATION COMPLETE ====' tests/run-firstboot-console-audit.sh 'the console audit observes interactive authentication completion'
 require_fixed 'ExecStart=/usr/sbin/agetty ' tests/firstboot-console-audit.conf 'the run0 audit creates a real getty, PAM, and logind login session'
 require_fixed 'StandardInput=tty-force' tests/firstboot-console-audit.conf 'the run0 audit owns a real controlling console'
-require_fixed 'PARTICLEOS_FIRSTBOOT_CONSOLE_PASS ' tests/firstboot-console-expect.py 'the native provisioning audit has an unambiguous success marker'
+require_fixed 'PARTICLEOS_FIRSTBOOT_CONSOLE_PASS ' tests/run-firstboot-console-audit.sh 'the native provisioning audit has an unambiguous success marker'
 require_fixed 'SuccessAction=poweroff' tests/firstboot-console-audit.conf 'the native firstboot guest powers off after success'
 require_fixed 'FailureAction=poweroff' tests/firstboot-console-audit.conf 'the native firstboot guest powers off after failure'
 require_fixed 'state=inactive' tests/homed-ssh-firstboot-audit 'the SSH audit begins with a locked homed account'
 require_fixed 'userdbctl ssh-authorized-keys' tests/homed-ssh-firstboot-audit 'the SSH audit verifies the key is available before home activation'
-require_fixed 'PasswordAuthentication=no' tests/homed-ssh-expect.py 'the SSH audit cannot fall back to an SSH password'
-require_fixed 'please enter password for user particleadmin' tests/homed-ssh-expect.py 'the SSH audit answers only the homed fallback-shell prompt'
-require_fixed 'PARTICLEOS_HOMED_SSH_UNLOCK_PASS' tests/homed-ssh-expect.py 'the SSH audit proves an interactive key-then-home-password login'
-require_fixed 'PARTICLEOS_HOMED_SSH_AVC_PASS' tests/homed-ssh-expect.py 'the SSH audit rejects SELinux denials on the unlock path'
-require_fixed 'HOMED_SSH_VM_DISPLAY:-gtk' tests/run-homed-ssh-audit.sh 'the homed SSH audit exposes a visible VM by default'
+require_fixed 'PasswordAuthentication=no' tests/homed-ssh-expect.sh 'the SSH audit cannot fall back to an SSH password'
+require_fixed 'please enter password for user particleadmin' tests/homed-ssh-expect.sh 'the SSH audit answers only the homed fallback-shell prompt'
+require_fixed 'PARTICLEOS_HOMED_SSH_UNLOCK_PASS' tests/homed-ssh-expect.sh 'the SSH audit proves an interactive key-then-home-password login'
+require_fixed 'PARTICLEOS_HOMED_SSH_AVC_PASS' tests/homed-ssh-expect.sh 'the SSH audit rejects SELinux denials on the unlock path'
+require_fixed 'HOMED_SSH_VM_DISPLAY:-gui' tests/run-homed-ssh-audit.sh 'the homed SSH audit exposes a visible mkosi VM by default'
 require_fixed 'mktemp -d /tmp/phs.XXXXXXXX' tests/run-homed-ssh-audit.sh 'the homed SSH audit keeps TPM socket paths below the Unix socket limit'
 require_fixed 'ParticleOS homed SSH unlock audit passed' tests/run-homed-ssh-audit.sh 'the homed SSH runner has an unambiguous success marker'
 require_fixed 'Requires=particleos-pcrlock-enroll.service systemd-homed-firstboot.service particleos-network-security.target' tests/vm-audit-getty.conf 'the VM audit cannot race administrator creation or network security'
@@ -613,6 +639,7 @@ require_fixed 'PARTICLEOS_WORKLOAD_QUARANTINED version=$candidate_version attemp
 require_fixed 'VM_UPDATE_AUDIT_SCENARIO' tests/run-update-rollback-audit.sh 'individual rollback scenarios can be reproduced without rerunning unrelated lifecycle boots'
 require_fixed 'did not have the expected boot count and usrhash' tests/run-update-rollback-audit.sh 'counted-attempt failures retain actionable guest diagnostics'
 require_fixed 'UPDATE_ROLLBACK_AUDIT_COUNTED_HOST_FAILURE' tests/run-update-rollback-audit.sh 'early injected host failures are tied to the exact counted candidate filename'
+require_fixed '>/dev/ttyS0' tests/update-rollback-host-failure 'the injected host-failure marker reaches the authoritative serial audit log'
 require_fixed 'UPDATE_ROLLBACK_AUDIT_JSON' tests/update-rollback-audit.sh 'update audit verifies stable systemd machine-readable candidate metadata'
 require_fixed 'systemctl status --no-pager --full systemd-sysupdate.service' tests/update-rollback-audit.sh 'update audit preserves the production service failure cause'
 require_fixed 'run_guest rollback-denial 0 enrollment' tests/run-update-rollback-audit.sh 'update audit preserves bootstrap through a separate enrollment boot'
@@ -708,11 +735,16 @@ require_fixed 'validation=passed' mkosi.scripts/obs-build 'the signing pass requ
 require_fixed 'name: security-gate' .github/workflows/security.yml 'GitHub reports the repository security gate'
 require_fixed 'run: ./scripts/validate.sh' .github/workflows/security.yml 'GitHub executes the same publication policy suite'
 require_fixed 'actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09' .github/workflows/security.yml 'the CI checkout action is commit-pinned'
-python3 tests/test-repart-archive-policy.py && pass 'hostile repart archive cases are rejected' || failures=$((failures + 1))
-python3 tests/test-ipe-signature-archive-policy.py && pass 'hostile IPE signer-response archives are rejected' || failures=$((failures + 1))
-python3 tests/test-artifact-snapshot-policy.py && pass 'artifact validation uses an exact immutable release snapshot' || failures=$((failures + 1))
-python3 tests/test-uki-snapshot-policy.py && pass 'PCR policy generation uses stable verified UKI copies' || failures=$((failures + 1))
-python3 tests/test-systemd-manifest-policy.py && pass 'local and OBS builds reject a rolled-back systemd package set' || failures=$((failures + 1))
+tests/test-repart-archive-policy.sh && pass 'hostile repart archive cases are rejected' || failures=$((failures + 1))
+tests/test-ipe-signature-archive-policy.sh && pass 'hostile IPE signer-response archives are rejected' || failures=$((failures + 1))
+tests/test-artifact-snapshot-policy.sh && pass 'artifact validation uses an exact immutable release snapshot' || failures=$((failures + 1))
+tests/test-uki-snapshot-policy.sh && pass 'PCR policy generation uses stable verified UKI copies' || failures=$((failures + 1))
+tests/test-systemd-manifest-policy.sh && pass 'local and OBS builds reject a rolled-back systemd package set' || failures=$((failures + 1))
+if find tests -type f -name '*.py' -print -quit | grep -q .; then
+    fail 'test tooling is implemented in Bash rather than Python'
+else
+    pass 'test tooling is implemented in Bash rather than Python'
+fi
 
 for section in \
     '## Purpose' \
@@ -735,52 +767,57 @@ else
     pass 'README is the sole project documentation file'
 fi
 
-python3 - <<'PY' || failures=$((failures + 1))
-import xml.etree.ElementTree as ET
-paths = ('.obs/runsc/_service', '.obs/runsc/package-meta.xml',
-         '.obs/ipe-policy-containerhost/package-meta.xml',
-         '.obs/particleos-containerhost/_service.example',
-         '.obs/particleos-containerhost/package-meta.xml')
-for p in paths:
-    ET.parse(p)
-
-root = ET.parse('.obs/runsc/_service').getroot()
-expected = (
-    ('download_url', {
-        'protocol': 'https',
-        'host': 'storage.googleapis.com',
-        'path': 'gvisor/releases/release/20260810.0/x86_64/gvisor.tar.bz2',
-        'filename': 'gvisor.tar.bz2',
-    }),
-    ('verify_file', {
-        'file': '_service:download_url:gvisor.tar.bz2',
-        'verifier': 'sha256',
-        'checksum': '3eca0158249c6b9b1f0d96c8f429c2aec6a4bcabd1a549bf25b15e48ca6d1d0c',
-    }),
-    ('download_url', {
-        'protocol': 'https',
-        'host': 'raw.githubusercontent.com',
-        'path': 'google/gvisor/release-20260810.0/LICENSE',
-        'filename': 'LICENSE.gvisor',
-    }),
-    ('verify_file', {
-        'file': '_service:download_url:LICENSE.gvisor',
-        'verifier': 'sha256',
-        'checksum': '0fbab5c58efbdf6d31e8085214f2dd821659c03d73cff3ed2b08e98826ea1cd9',
-    }),
+xml_files=(
+    .obs/runsc/_service
+    .obs/runsc/package-meta.xml
+    .obs/ipe-policy-containerhost/package-meta.xml
+    .obs/particleos-containerhost/_service.example
+    .obs/particleos-containerhost/package-meta.xml
 )
-assert root.tag == 'services' and not root.attrib
-assert len(root) == len(expected)
-for service, (name, parameters) in zip(root, expected, strict=True):
-    assert service.tag == 'service' and service.attrib == {'name': name}
-    actual = {}
-    for parameter in service:
-        assert parameter.tag == 'param' and set(parameter.attrib) == {'name'}
-        assert len(parameter) == 0 and parameter.attrib['name'] not in actual
-        actual[parameter.attrib['name']] = (parameter.text or '').strip()
-    assert actual == parameters
-print('ok - OBS service and package XML is well formed')
-PY
+xml_ok=1
+for xml_file in "${xml_files[@]}"; do
+    xmllint --noout "$xml_file" || xml_ok=0
+done
+
+xml_value() {
+    xmllint --xpath "string($2)" "$1"
+}
+
+service_xml=.obs/runsc/_service
+[[ $(xml_value "$service_xml" 'count(/services/@*)') == 0 &&
+   $(xml_value "$service_xml" 'count(/services/*)') == 4 &&
+   $(xml_value "$service_xml" 'count(/services/service)') == 4 &&
+   $(xml_value "$service_xml" 'count(/services/service/@*)') == 4 &&
+   $(xml_value "$service_xml" 'count(/services/service/*[not(self::param)])') == 0 &&
+   $(xml_value "$service_xml" 'count(/services/service/param/*)') == 0 &&
+   $(xml_value "$service_xml" 'count(/services/service/param/@*)') == 14 &&
+   $(xml_value "$service_xml" '/services/service[1]/@name') == download_url &&
+   $(xml_value "$service_xml" '/services/service[1]/param[@name="protocol"]') == https &&
+   $(xml_value "$service_xml" '/services/service[1]/param[@name="host"]') == storage.googleapis.com &&
+   $(xml_value "$service_xml" '/services/service[1]/param[@name="path"]') == gvisor/releases/release/20260810.0/x86_64/gvisor.tar.bz2 &&
+   $(xml_value "$service_xml" '/services/service[1]/param[@name="filename"]') == gvisor.tar.bz2 &&
+   $(xml_value "$service_xml" 'count(/services/service[1]/param)') == 4 &&
+   $(xml_value "$service_xml" '/services/service[2]/@name') == verify_file &&
+   $(xml_value "$service_xml" '/services/service[2]/param[@name="file"]') == _service:download_url:gvisor.tar.bz2 &&
+   $(xml_value "$service_xml" '/services/service[2]/param[@name="verifier"]') == sha256 &&
+   $(xml_value "$service_xml" '/services/service[2]/param[@name="checksum"]') == 3eca0158249c6b9b1f0d96c8f429c2aec6a4bcabd1a549bf25b15e48ca6d1d0c &&
+   $(xml_value "$service_xml" 'count(/services/service[2]/param)') == 3 &&
+   $(xml_value "$service_xml" '/services/service[3]/@name') == download_url &&
+   $(xml_value "$service_xml" '/services/service[3]/param[@name="protocol"]') == https &&
+   $(xml_value "$service_xml" '/services/service[3]/param[@name="host"]') == raw.githubusercontent.com &&
+   $(xml_value "$service_xml" '/services/service[3]/param[@name="path"]') == google/gvisor/release-20260810.0/LICENSE &&
+   $(xml_value "$service_xml" '/services/service[3]/param[@name="filename"]') == LICENSE.gvisor &&
+   $(xml_value "$service_xml" 'count(/services/service[3]/param)') == 4 &&
+   $(xml_value "$service_xml" '/services/service[4]/@name') == verify_file &&
+   $(xml_value "$service_xml" '/services/service[4]/param[@name="file"]') == _service:download_url:LICENSE.gvisor &&
+   $(xml_value "$service_xml" '/services/service[4]/param[@name="verifier"]') == sha256 &&
+   $(xml_value "$service_xml" '/services/service[4]/param[@name="checksum"]') == 0fbab5c58efbdf6d31e8085214f2dd821659c03d73cff3ed2b08e98826ea1cd9 &&
+   $(xml_value "$service_xml" 'count(/services/service[4]/param)') == 3 ]] || xml_ok=0
+if ((xml_ok)); then
+    pass 'OBS service and package XML is well formed'
+else
+    fail 'OBS service and package XML is well formed'
+fi
 
 if find mkosi.images mkosi.uki-profiles -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
     fail 'no role images or alternate UKI profiles remain'

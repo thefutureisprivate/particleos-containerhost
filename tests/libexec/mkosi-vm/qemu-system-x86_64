@@ -1,0 +1,61 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -euo pipefail
+
+# mkosi 26 selects Wayland SDL with host OpenGL and PipeWire audio for
+# Console=gui. The local QEMU 11 frontend crashes in both the Wayland and audio
+# paths. Use its stable X11 GTK frontend without GL or test-irrelevant audio,
+# and keep every non-UI mkosi-owned QEMU argument byte-for-byte intact.
+arguments=()
+persistent_firmware_variables=
+while (($#)); do
+    if [[ $1 == -particleos-test-firmware-variables ]]; then
+        (($# >= 2)) || {
+            echo 'missing persistent firmware-variable path' >&2
+            exit 2
+        }
+        persistent_firmware_variables=$2
+        shift 2
+    else
+        arguments+=("$1")
+        shift
+    fi
+done
+
+if [[ -n $persistent_firmware_variables ]]; then
+    [[ $persistent_firmware_variables == /* &&
+            $persistent_firmware_variables != *,* &&
+            -f $persistent_firmware_variables ]] || {
+        echo 'invalid persistent firmware-variable path' >&2
+        exit 2
+    }
+
+    replaced=0
+    for ((index = 1; index < ${#arguments[@]}; index++)); do
+        if [[ ${arguments[index - 1]} == -drive &&
+                ${arguments[index]} == file=*/mkosi-ovmf-vars-*,if=pflash,format=* ]]; then
+            drive_options=${arguments[index]#*,}
+            arguments[index]="file=$persistent_firmware_variables,$drive_options"
+            ((replaced += 1))
+        fi
+    done
+    ((replaced == 1)) || {
+        echo "expected one mkosi firmware-variable drive, found $replaced" >&2
+        exit 2
+    }
+fi
+
+for ((index = 0; index + 1 < ${#arguments[@]}; index++)); do
+    if [[ ${arguments[index]} == -display &&
+            ${arguments[index + 1]} == sdl,gl=on ]]; then
+        arguments[index + 1]=gtk,gl=off
+    elif [[ ${arguments[index]} == -audio &&
+            ${arguments[index + 1]} == driver=pipewire,model=virtio ]]; then
+        arguments[index + 1]=driver=none
+    fi
+done
+
+unset WAYLAND_DISPLAY
+export GDK_BACKEND=x11
+export LIBGL_ALWAYS_SOFTWARE=1
+exec /usr/bin/qemu-system-x86_64 "${arguments[@]}"

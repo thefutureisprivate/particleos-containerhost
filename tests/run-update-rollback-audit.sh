@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-if [[ $# -lt 3 || $# -gt 4 ]]; then
-    echo "usage: $0 BASE_ARTIFACT_DIRECTORY CANDIDATE_ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS [OVMF_CODE]" >&2
+if [[ $# -ne 3 ]]; then
+    echo "usage: $0 BASE_ARTIFACT_DIRECTORY CANDIDATE_ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS" >&2
     exit 2
 fi
 
 repository=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=tests/lib/mkosi-vm.sh
+source "$repository/tests/lib/mkosi-vm.sh"
 base_artifacts=$(realpath "$1")
 candidate_artifacts=$(realpath "$2")
 ovmf_vars_source=$(realpath "$3")
-ovmf_code=${4:-/usr/share/qemu/ovmf-x86_64-smm-code.bin}
-ovmf_code=$(realpath "$ovmf_code")
 audit_timeout=${VM_UPDATE_AUDIT_TIMEOUT:-900}
 denial_timeout=${VM_UPDATE_DENIAL_TIMEOUT:-80}
 audit_tmpdir=${VM_UPDATE_AUDIT_TMPDIR:-$base_artifacts}
@@ -36,23 +36,16 @@ done
     echo 'VM_UPDATE_AUDIT_SCENARIO must be all, rollback-denial, workload-quarantine, or host-fallback' >&2
     exit 2
 }
-[[ $vm_display == none || $vm_display == gtk ]] || {
-    echo 'VM_UPDATE_AUDIT_DISPLAY must be none or gtk' >&2
-    exit 2
-}
-[[ -r /dev/kvm && -w /dev/kvm ]] || {
-    echo '/dev/kvm is unavailable' >&2
-    exit 1
-}
-for command in base64 cp cut find grep mktemp pgrep qemu-system-x86_64 \
-        realpath sed sort swtpm tail timeout tr truncate zstd; do
+vm_console=$(mkosi_vm_console "$vm_display")
+mkosi_vm_require
+for command in cp cut find grep install mktemp realpath sed sort tail timeout \
+        truncate zstd; do
     command -v "$command" >/dev/null || {
         echo "missing required command: $command" >&2
         exit 1
     }
 done
 [[ -f $ovmf_vars_source ]] || { echo "missing OVMF variable store: $ovmf_vars_source" >&2; exit 1; }
-[[ -f $ovmf_code ]] || { echo "missing OVMF code image: $ovmf_code" >&2; exit 1; }
 [[ -d $audit_tmpdir && -w $audit_tmpdir ]] || {
     echo "VM update audit temporary directory is not writable: $audit_tmpdir" >&2
     exit 1
@@ -105,81 +98,20 @@ latest_version=$(printf '%s\n%s\n' "$base_version" "$candidate_version" | sort -
 # Keeping this reference makes the required local evidence explicit.
 [[ -s $candidate_image ]]
 
-audit_service=$(base64 -w0 "$repository/tests/update-rollback-audit-getty.conf")
-audit_script=$(base64 -w0 "$repository/tests/update-rollback-audit.sh")
-prune_audit=$(base64 -w0 "$repository/tests/update-rollback-prune-audit.conf")
-audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
-pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
-boot_diagnostic_service=$(base64 -w0 "$repository/tests/boot-audit-diagnostic.conf")
-boot_diagnostic_script=$(base64 -w0 "$repository/tests/boot-audit-diagnostic")
-homed_firstboot_dropin=$(base64 -w0 "$repository/tests/homed-firstboot-audit.conf")
-homed_firstboot_audit=$(base64 -w0 "$repository/tests/homed-firstboot-audit")
-root_password=$(printf particleos | base64 -w0)
-firstboot_timezone=$(printf Etc/UTC | base64 -w0)
-health_dropin=$(base64 -w0 "$repository/tests/update-rollback-health.conf")
-health_script=$(base64 -w0 "$repository/tests/update-rollback-health.sh")
-host_failure_dropin=$(base64 -w0 "$repository/tests/update-rollback-host-failure.conf")
-host_failure_script=$(base64 -w0 "$repository/tests/update-rollback-host-failure")
-base_credential=$(printf '%s\n' "$base_version" | base64 -w0)
-candidate_credential=$(printf '%s\n' "$candidate_version" | base64 -w0)
-
 scratch=$(mktemp -d "$audit_tmpdir/.particleos-update-rollback.XXXXXXXX")
 runtime_directory=$(mktemp -d /tmp/particleos-update-rollback.XXXXXXXX)
 active_state=
-qemu_active=0
-
-stop_tpm() {
-    local pid='' pidfile
-    [[ -n ${active_state:-} ]] || return 0
-    pidfile=$active_state/swtpm.pid
-    if [[ -s $pidfile ]]; then
-        read -r pid <"$pidfile" || true
-    fi
-    if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/comm &&
-            -r /proc/$pid/cmdline && $(<"/proc/$pid/comm") == swtpm ]]; then
-        command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline")
-        if [[ $command_line == *"$active_state/"* ]]; then
-            kill "$pid" 2>/dev/null || true
-            for _ in {1..20}; do
-                [[ ! -e /proc/$pid ]] && break
-                sleep 0.1
-            done
-            if [[ -r /proc/$pid/comm && $(<"/proc/$pid/comm") == swtpm ]]; then
-                kill -KILL "$pid" 2>/dev/null || true
-            fi
-        fi
-    fi
-}
-
-stop_qemu() {
-    local command_line='' pid='' pidfile
-    [[ -n ${active_state:-} ]] || return 0
-    pidfile=$active_state/qemu.pid
-    if [[ -s $pidfile ]]; then
-        read -r pid <"$pidfile" || true
-    fi
-    if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/comm &&
-            -r /proc/$pid/cmdline && $(<"/proc/$pid/comm") == qemu-system-x86 ]]; then
-        command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline")
-        if [[ $command_line == *"$active_state/"* ]]; then
-            kill -TERM "$pid" 2>/dev/null || true
-            for _ in {1..30}; do
-                [[ ! -e /proc/$pid ]] && break
-                sleep 0.1
-            done
-            if [[ -r /proc/$pid/comm && $(<"/proc/$pid/comm") == qemu-system-x86 ]]; then
-                kill -KILL "$pid" 2>/dev/null || true
-            fi
-        fi
-    fi
-}
+vm_active=0
+active_machine=
 
 cleanup() {
     local status=$?
-    if ((qemu_active)); then
-        stop_qemu
+    if ((vm_active)) && [[ -n ${active_state:-} && -n ${active_machine:-} ]]; then
+        mkosi_vm_stop 0 "$active_state" "$active_machine"
     fi
-    stop_tpm
+    if [[ -n ${active_state:-} ]]; then
+        mkosi_vm_stop_tpm "$active_state/swtpm.pid" "$active_state"
+    fi
     if [[ -n ${runtime_directory:-} && -d $runtime_directory &&
             $runtime_directory == /tmp/particleos-update-rollback.* ]]; then
         rm -rf -- "$runtime_directory"
@@ -194,6 +126,23 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
+
+install_credential() {
+    local source=$1 directory=$2 name=$3
+    install -m 0600 "$source" "$directory/$name"
+}
+
+write_credential() {
+    local value=$1 directory=$2 name=$3
+    printf '%s' "$value" >"$directory/$name"
+    chmod 0600 "$directory/$name"
+}
+
+write_line_credential() {
+    local value=$1 directory=$2 name=$3
+    printf '%s\n' "$value" >"$directory/$name"
+    chmod 0600 "$directory/$name"
+}
 
 prepare_scenario() {
     local scenario=$1
@@ -243,67 +192,61 @@ run_guest() {
     local scenario=$1 boot_number=$2 expectation=$3
     local log=$active_state/boot-$boot_number.log
     local socket=$runtime_directory/tpm.sock
-    local scenario_credential status timeout_seconds
-    scenario_credential=$(printf '%s\n' "$scenario" | base64 -w0)
+    local credentials=$active_state/credentials-$boot_number
+    local status timeout_seconds
     timeout_seconds=$audit_timeout
     [[ $expectation == denied ]] && timeout_seconds=$denial_timeout
 
-    rm -f -- "$active_state/swtpm.pid" "$active_state/qemu.pid" "$socket"
-    swtpm socket \
-        --tpm2 \
-        --tpmstate "dir=$active_state/tpm" \
-        --ctrl "type=unixio,path=$socket" \
-        --pid "file=$active_state/swtpm.pid" \
-        --log "file=$active_state/swtpm-$boot_number.log" \
-        --daemon \
-        --terminate
+    mkdir -m 0700 "$credentials"
+    install_credential "$repository/tests/update-rollback-audit-getty.conf" "$credentials" \
+        'systemd.unit-dropin.getty@tty1.service~90-particleos-update-audit'
+    install_credential "$repository/tests/audit-activate.conf" "$credentials" \
+        'systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit'
+    install_credential "$repository/tests/pcrlock-enroll-audit.conf" "$credentials" \
+        'systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit'
+    install_credential "$repository/tests/update-rollback-prune-audit.conf" "$credentials" \
+        'systemd.unit-dropin.particleos-pcrlock-prune.service~90-particleos-audit'
+    install_credential "$repository/tests/update-rollback-host-failure.conf" "$credentials" \
+        'systemd.unit-dropin.particleos-pcrlock-prune.service~80-particleos-host-failure'
+    install_credential "$repository/tests/boot-audit-diagnostic.conf" "$credentials" \
+        'systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit'
+    install_credential "$repository/tests/boot-audit-diagnostic" "$credentials" boot-audit-diagnostic
+    install_credential "$repository/tests/homed-firstboot-audit.conf" "$credentials" \
+        'systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit'
+    install_credential "$repository/tests/homed-firstboot-audit" "$credentials" homed-firstboot-audit
+    install_credential "$repository/tests/update-rollback-health.conf" "$credentials" \
+        'systemd.unit-dropin.particleos-workload-health.service~90-particleos-update-audit'
+    install_credential "$repository/tests/update-rollback-audit.sh" "$credentials" update-rollback-audit
+    install_credential "$repository/tests/update-rollback-health.sh" "$credentials" update-rollback-health
+    install_credential "$repository/tests/update-rollback-host-failure" "$credentials" update-rollback-host-failure
+    write_credential particleos "$credentials" passwd.plaintext-password.root
+    write_credential Etc/UTC "$credentials" firstboot.timezone
+    write_line_credential "$scenario" "$credentials" update-audit-scenario
+    write_line_credential "$base_version" "$credentials" update-audit-base-version
+    write_line_credential "$candidate_version" "$credentials" update-audit-candidate-version
 
-    qemu_active=1
-    set +e
-    timeout --foreground --signal=TERM --kill-after=15s "$timeout_seconds" \
-        qemu-system-x86_64 \
-        -name "particleos-update-rollback-audit-$$-$scenario" \
-        -machine q35,smm=on,accel=kvm \
-        -cpu host \
-        -m 2048 \
-        -smp 2 \
-        -pidfile "$active_state/qemu.pid" \
-        -global driver=cfi.pflash01,property=secure,value=on \
-        -drive "if=pflash,format=raw,unit=0,readonly=on,file=$ovmf_code" \
-        -drive "if=pflash,format=raw,unit=1,file=$active_state/ovmf-vars.bin" \
-        -drive "if=virtio,format=raw,file=$active_state/particleos.raw" \
-        -chardev "socket,id=chrtpm,path=$socket" \
-        -tpmdev emulator,id=tpm0,chardev=chrtpm \
-        -device tpm-tis,tpmdev=tpm0 \
+    rm -f -- "$active_state/swtpm.pid" "$socket"
+    mkosi_vm_start_tpm "$active_state/tpm" "$socket" "$active_state/swtpm.pid" \
+        "$active_state/swtpm-$boot_number.log"
+    active_machine="particleos-update-audit-$$-$scenario-$boot_number"
+    mkosi_vm_build_command "$repository" "$active_state/particleos.raw" \
+        "$active_state/ovmf-vars.bin" "$active_machine" "$vm_console" \
+        "$credentials" \
+        'systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
+        "$socket" "file:$log" \
         -netdev user,id=net0 \
         -device virtio-net-pci,netdev=net0 \
-        -display "$vm_display" \
-        -serial "file:$log" \
-        -monitor none \
-        -no-reboot \
-        -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-update-audit=$audit_service" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-prune.service~90-particleos-audit=$prune_audit" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-prune.service~80-particleos-host-failure=$host_failure_dropin" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service" \
-        -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit=$homed_firstboot_dropin" \
-        -smbios "type=11,value=io.systemd.credential.binary:homed-firstboot-audit=$homed_firstboot_audit" \
-        -smbios "type=11,value=io.systemd.credential.binary:passwd.plaintext-password.root=$root_password" \
-        -smbios "type=11,value=io.systemd.credential.binary:firstboot.timezone=$firstboot_timezone" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-workload-health.service~90-particleos-update-audit=$health_dropin" \
-        -smbios "type=11,value=io.systemd.credential.binary:update-rollback-audit=$audit_script" \
-        -smbios "type=11,value=io.systemd.credential.binary:update-rollback-health=$health_script" \
-        -smbios "type=11,value=io.systemd.credential.binary:update-rollback-host-failure=$host_failure_script" \
-        -smbios "type=11,value=io.systemd.credential.binary:update-audit-scenario=$scenario_credential" \
-        -smbios "type=11,value=io.systemd.credential.binary:update-audit-base-version=$base_credential" \
-        -smbios "type=11,value=io.systemd.credential.binary:update-audit-candidate-version=$candidate_credential"
+        -no-reboot
+
+    vm_active=1
+    set +e
+    timeout --foreground --signal=TERM --kill-after=15s "$timeout_seconds" \
+        "${MKOSI_VM_COMMAND[@]}"
     status=$?
     set -e
-    qemu_active=0
-    stop_tpm
+    mkosi_vm_stop 0 "$active_state" "$active_machine"
+    vm_active=0
+    mkosi_vm_stop_tpm "$active_state/swtpm.pid" "$active_state"
 
     if [[ $expectation == clean || $expectation == enrollment ]]; then
         if ((status != 0)); then
@@ -339,7 +282,7 @@ run_guest() {
             echo 'superseded UKI bypassed the TPM rollback boundary' >&2
             return 1
         fi
-        grep -q 'unit=emergency ' "$log" || {
+        grep -Eq 'unit=emergency |Started emergency[.]service|Reached target emergency[.]target' "$log" || {
             tail -240 "$log" >&2 || true
             echo 'superseded UKI did not produce the expected initrd emergency evidence' >&2
             return 1

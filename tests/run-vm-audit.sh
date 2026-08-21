@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-if [[ $# -lt 3 || $# -gt 4 ]]; then
-    echo "usage: $0 ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS CONTAINER_FIXTURE [OVMF_CODE]" >&2
+if [[ $# -ne 3 ]]; then
+    echo "usage: $0 ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS CONTAINER_FIXTURE" >&2
     exit 2
 fi
 
 repository=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=tests/lib/mkosi-vm.sh
+source "$repository/tests/lib/mkosi-vm.sh"
 artifact_directory=$(realpath "$1")
 ovmf_vars_source=$(realpath "$2")
 container_fixture=$(realpath "$3")
-ovmf_code=${4:-/usr/share/qemu/ovmf-x86_64-smm-code.bin}
-ovmf_code=$(realpath "$ovmf_code")
 audit_timeout=${VM_AUDIT_TIMEOUT:-900}
 denial_timeout=${VM_AUDIT_DENIAL_TIMEOUT:-80}
 audit_tmpdir=${VM_AUDIT_TMPDIR:-$artifact_directory}
@@ -32,16 +32,10 @@ vm_display=${VM_AUDIT_DISPLAY:-none}
     echo 'VM_AUDIT_ONLY_NETWORK_FAULT must be 0 or 1' >&2
     exit 2
 }
-[[ $vm_display == none || $vm_display == gtk ]] || {
-    echo 'VM_AUDIT_DISPLAY must be none or gtk' >&2
-    exit 2
-}
-[[ -r /dev/kvm && -w /dev/kvm ]] || {
-    echo '/dev/kvm is unavailable' >&2
-    exit 1
-}
-for command in base64 cp dd find grep jq mcopy mktemp pgrep pkill qemu-system-x86_64 \
-        realpath swtpm systemd-repart tail timeout tr truncate zstd; do
+vm_console=$(mkosi_vm_console "$vm_display")
+mkosi_vm_require
+for command in cp dd find grep install jq mcopy mktemp realpath systemd-repart \
+        tail timeout truncate zstd; do
     command -v "$command" >/dev/null || {
         echo "missing required command: $command" >&2
         exit 1
@@ -49,7 +43,6 @@ for command in base64 cp dd find grep jq mcopy mktemp pgrep pkill qemu-system-x8
 done
 [[ -f $ovmf_vars_source ]] || { echo "missing OVMF variable store: $ovmf_vars_source" >&2; exit 1; }
 [[ -f $container_fixture ]] || { echo "missing signed container fixture: $container_fixture" >&2; exit 1; }
-[[ -f $ovmf_code ]] || { echo "missing OVMF code image: $ovmf_code" >&2; exit 1; }
 [[ -d $audit_tmpdir && -w $audit_tmpdir ]] || {
     echo "VM audit temporary directory is not writable: $audit_tmpdir" >&2
     exit 1
@@ -70,47 +63,16 @@ mapfile -t compressed_images < <(
 }
 
 scratch=$(mktemp -d "$audit_tmpdir/.particleos-vm-audit.XXXXXXXX")
-qemu_active=0
+vm_active=0
+active_machine=
 swtpm_pid_file=$scratch/swtpm.pid
-
-stop_tpm() {
-    local command_line='' pid=''
-    if [[ -s $swtpm_pid_file ]]; then
-        read -r pid <"$swtpm_pid_file" || true
-    fi
-    if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/comm &&
-            -r /proc/$pid/cmdline ]]; then
-        command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline")
-    fi
-    if [[ $command_line == *"$scratch/"* ]] &&
-            [[ $(<"/proc/$pid/comm") == swtpm ]]; then
-        kill "$pid" 2>/dev/null || true
-        for _ in {1..20}; do
-            [[ ! -e /proc/$pid ]] && break
-            sleep 0.1
-        done
-        if [[ -r /proc/$pid/comm ]] && [[ $(<"/proc/$pid/comm") == swtpm ]]; then
-            kill -KILL "$pid" 2>/dev/null || true
-        fi
-    fi
-}
-
-stop_qemu() {
-    local pattern="name particleos-containerhost-audit-$$"
-    pkill -TERM -f "$pattern" 2>/dev/null || true
-    for _ in {1..30}; do
-        pgrep -f "$pattern" >/dev/null || return 0
-        sleep 0.1
-    done
-    pkill -KILL -f "$pattern" 2>/dev/null || true
-}
 
 cleanup() {
     local status=$?
-    if ((qemu_active)); then
-        stop_qemu
+    if ((vm_active)) && [[ -n $active_machine ]]; then
+        mkosi_vm_stop 0 "$scratch" "$active_machine"
     fi
-    stop_tpm
+    mkosi_vm_stop_tpm "$swtpm_pid_file" "$scratch"
     rm -rf -- "$snapshot_root"
     if ((status != 0)) && [[ $keep_failed == 1 ]]; then
         echo "Preserved failed VM audit state: $scratch" >&2
@@ -130,106 +92,93 @@ cp --reflink=auto --sparse=always "$ovmf_vars_source" "$ovmf_vars"
 zstd --sparse -q -d -f -o "$disk" "${compressed_images[0]}"
 truncate -s 16G "$disk"
 
-audit_service=$(base64 -w0 "$repository/tests/vm-audit-getty.conf")
-audit_script=$(base64 -w0 "$repository/tests/vm-audit.sh")
-audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
-pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
-pcrlock_header_backup_dropin=$(base64 -w0 "$repository/tests/pcrlock-header-backup.conf")
-pcrlock_header_backup=$(base64 -w0 "$repository/tests/pcrlock-header-backup")
-boot_diagnostic_service=$(base64 -w0 "$repository/tests/boot-audit-diagnostic.conf")
-boot_diagnostic_script=$(base64 -w0 "$repository/tests/boot-audit-diagnostic")
-homed_firstboot_dropin=$(base64 -w0 "$repository/tests/homed-firstboot-audit.conf")
-homed_firstboot_audit=$(base64 -w0 "$repository/tests/homed-firstboot-audit")
-root_password=$(printf particleos | base64 -w0)
-firstboot_timezone=$(printf Etc/UTC | base64 -w0)
-nftables_failure=$(base64 -w0 "$repository/tests/nftables-failure.conf")
-network_failure_audit=$(base64 -w0 "$repository/tests/network-failure-audit.conf")
+install_credential() {
+    local source=$1 directory=$2 name=$3
+    install -m 0600 "$source" "$directory/$name"
+}
+
+write_credential() {
+    local value=$1 directory=$2 name=$3
+    printf '%s' "$value" >"$directory/$name"
+    chmod 0600 "$directory/$name"
+}
 
 run_boot() {
-    local boot_number=$1
-    local expectation=$2
-    local boot_disk=${3:-$disk}
+    local boot_number=$1 expectation=$2 boot_disk=${3:-$disk}
     local log=$scratch/boot-$boot_number.log
     local socket=$scratch/tpm-$boot_number.sock
+    local credentials=$scratch/credentials-$boot_number
     local timeout_seconds=$audit_timeout status
     local kernel_command_line_extra='systemd.mask=serial-getty@ttyS0.service'
-    local -a audit_credentials=() fault_credentials=()
-    [[ $expectation == denied ]] && timeout_seconds=$denial_timeout
-    if [[ $expectation == security-fault ]]; then
+    local -a qemu_arguments=(
+        -netdev 'user,id=net0,guestfwd=tcp:10.0.2.100:18443-cmd:/bin/cat'
+        -device 'virtio-net-pci,netdev=net0'
+        -no-reboot
+    )
+
+    mkdir -m 0700 "$credentials"
+    if [[ $expectation == denied ]]; then
         timeout_seconds=$denial_timeout
-        # The fault assertion is independent of provisioning. Do not let a
-        # resumable native first-boot prompt consume the bounded denial window
-        # before network-pre.target reaches the deliberately failed firewall.
+    elif [[ $expectation == security-fault ]]; then
+        timeout_seconds=$denial_timeout
+        # Do not let a resumable provisioning prompt consume the bounded
+        # firewall-failure window before network-pre.target is reached.
         kernel_command_line_extra+=' systemd.mask=systemd-firstboot.service systemd.mask=systemd-homed-firstboot.service'
-        fault_credentials=(
-            -smbios
-            "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.nftables.service~90-particleos-failure=$nftables_failure"
-            -smbios
-            "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service"
-            -smbios
-            "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script"
-            -smbios
-            "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate"
-            -smbios
-            "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-network-failure=$network_failure_audit"
-        )
+        install_credential "$repository/tests/nftables-failure.conf" "$credentials" \
+            'systemd.unit-dropin.nftables.service~90-particleos-failure'
+        install_credential "$repository/tests/boot-audit-diagnostic.conf" "$credentials" \
+            'systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit'
+        install_credential "$repository/tests/boot-audit-diagnostic" "$credentials" \
+            boot-audit-diagnostic
+        install_credential "$repository/tests/audit-activate.conf" "$credentials" \
+            'systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit'
+        install_credential "$repository/tests/network-failure-audit.conf" "$credentials" \
+            'systemd.unit-dropin.getty@tty1.service~90-particleos-network-failure'
     else
-        audit_credentials=(
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit=$audit_service"
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate"
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit"
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~80-particleos-header-backup=$pcrlock_header_backup_dropin"
-            -smbios "type=11,value=io.systemd.credential.binary:pcrlock-header-backup=$pcrlock_header_backup"
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit=$boot_diagnostic_service"
-            -smbios "type=11,value=io.systemd.credential.binary:boot-audit-diagnostic=$boot_diagnostic_script"
-            -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit=$homed_firstboot_dropin"
-            -smbios "type=11,value=io.systemd.credential.binary:homed-firstboot-audit=$homed_firstboot_audit"
-            -smbios "type=11,value=io.systemd.credential.binary:passwd.plaintext-password.root=$root_password"
-            -smbios "type=11,value=io.systemd.credential.binary:firstboot.timezone=$firstboot_timezone"
-            -smbios "type=11,value=io.systemd.credential.binary:vm-audit=$audit_script"
+        install_credential "$repository/tests/vm-audit-getty.conf" "$credentials" \
+            'systemd.unit-dropin.getty@tty1.service~90-particleos-vm-audit'
+        install_credential "$repository/tests/audit-activate.conf" "$credentials" \
+            'systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit'
+        install_credential "$repository/tests/pcrlock-enroll-audit.conf" "$credentials" \
+            'systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit'
+        install_credential "$repository/tests/pcrlock-header-backup.conf" "$credentials" \
+            'systemd.unit-dropin.particleos-pcrlock-enroll.service~80-particleos-header-backup'
+        install_credential "$repository/tests/pcrlock-header-backup" "$credentials" \
+            pcrlock-header-backup
+        install_credential "$repository/tests/boot-audit-diagnostic.conf" "$credentials" \
+            'systemd.unit-dropin.systemd-udev-trigger.service~90-particleos-audit'
+        install_credential "$repository/tests/boot-audit-diagnostic" "$credentials" \
+            boot-audit-diagnostic
+        install_credential "$repository/tests/homed-firstboot-audit.conf" "$credentials" \
+            'systemd.unit-dropin.systemd-homed-firstboot.service~90-particleos-audit'
+        install_credential "$repository/tests/homed-firstboot-audit" "$credentials" \
+            homed-firstboot-audit
+        install_credential "$repository/tests/vm-audit.sh" "$credentials" vm-audit
+        write_credential particleos "$credentials" passwd.plaintext-password.root
+        write_credential Etc/UTC "$credentials" firstboot.timezone
+        qemu_arguments=(
+            -drive "if=virtio,format=raw,readonly=on,file=$container_fixture"
+            "${qemu_arguments[@]}"
         )
     fi
 
-    rm -f -- "$swtpm_pid_file"
-    swtpm socket \
-        --tpm2 \
-        --tpmstate "dir=$tpm_state" \
-        --ctrl "type=unixio,path=$socket" \
-        --pid "file=$swtpm_pid_file" \
-        --log "file=$scratch/swtpm-$boot_number.log" \
-        --daemon \
-        --terminate
+    mkosi_vm_start_tpm "$tpm_state" "$socket" "$swtpm_pid_file" \
+        "$scratch/swtpm-$boot_number.log"
+    active_machine="particleos-audit-$$-$boot_number"
+    mkosi_vm_build_command "$repository" "$boot_disk" "$ovmf_vars" \
+        "$active_machine" "$vm_console" "$credentials" \
+        "$kernel_command_line_extra" "$socket" "file:$log" \
+        "${qemu_arguments[@]}"
 
-    qemu_active=1
+    vm_active=1
     set +e
     timeout --foreground --signal=TERM --kill-after=15s "$timeout_seconds" \
-            qemu-system-x86_64 \
-            -name "particleos-containerhost-audit-$$" \
-            -machine q35,smm=on,accel=kvm \
-            -cpu host \
-            -m 2048 \
-            -smp 2 \
-            -global driver=cfi.pflash01,property=secure,value=on \
-            -drive "if=pflash,format=raw,unit=0,readonly=on,file=$ovmf_code" \
-            -drive "if=pflash,format=raw,unit=1,file=$ovmf_vars" \
-            -drive "if=virtio,format=raw,file=$boot_disk" \
-            -drive "if=virtio,format=raw,readonly=on,file=$container_fixture" \
-            -chardev "socket,id=chrtpm,path=$socket" \
-            -tpmdev emulator,id=tpm0,chardev=chrtpm \
-            -device tpm-tis,tpmdev=tpm0 \
-            -netdev user,id=net0,guestfwd=tcp:10.0.2.100:18443-cmd:/bin/cat \
-            -device virtio-net-pci,netdev=net0 \
-            -display "$vm_display" \
-            -serial "file:$log" \
-            -monitor none \
-            -no-reboot \
-            -smbios "type=11,value=io.systemd.stub.kernel-cmdline-extra=$kernel_command_line_extra" \
-            "${audit_credentials[@]}" \
-            "${fault_credentials[@]}"
+        "${MKOSI_VM_COMMAND[@]}"
     status=$?
     set -e
-    qemu_active=0
-    stop_tpm
+    mkosi_vm_stop 0 "$scratch" "$active_machine"
+    vm_active=0
+    mkosi_vm_stop_tpm "$swtpm_pid_file" "$scratch"
 
     if [[ $expectation == denied ]]; then
         if ((status == 124)) &&
@@ -260,14 +209,14 @@ run_boot() {
         return 0
     fi
     tail -240 "$log" >&2 || true
-    echo "VM audit boot $boot_number failed" >&2
+    echo "VM audit boot $boot_number failed (mkosi status $status)" >&2
     return 1
 }
 
 if [[ $only_network_fault == 1 ]]; then
     echo 'Injecting an nftables startup failure on a fresh authenticated image...'
     run_boot 1 security-fault
-    echo 'ParticleOS fail-closed network startup audit passed; the guest and TPM emulator are stopped.'
+    echo 'ParticleOS fail-closed network startup audit passed; mkosi VM and TPM emulator are stopped.'
     exit 0
 fi
 
@@ -295,4 +244,4 @@ run_boot 4 denied "$header_replay_disk"
 echo 'Injecting an nftables startup failure to prove network activation fails closed...'
 run_boot 5 security-fault
 
-echo 'ParticleOS VM audit passed, including LUKS2 header-replay denial and fail-closed network startup; all guests and TPM emulators are stopped.'
+echo 'ParticleOS mkosi VM audit passed, including LUKS2 header-replay denial and fail-closed network startup; all guests and TPM emulators are stopped.'

@@ -552,6 +552,26 @@ repart-archive regression suite:
 ./scripts/validate-artifacts.sh /path/to/artifacts
 ```
 
+All repository test drivers are Bash programs; Python is not used for test
+control. Local guest tests launch the authenticated image through `mkosi vm`
+from the repository configuration. mkosi owns the VM process, Secure Boot
+firmware selection, primary disk, native systemd credentials, resources,
+network devices, and visible console.
+
+Lifecycle tests must retain two pieces of machine state across separate
+`mkosi vm` invocations. A persistent swtpm preserves sealed state, and a
+caller-owned scratch copy of the enrolled OVMF variable store preserves
+systemd-boot one-shot selection and boot counters. mkosi 26 normally gives
+each invocation a temporary OVMF copy, so a narrow test-only QEMU wrapper
+replaces exactly that temporary pflash argument with the scratch store while
+leaving mkosi's remaining command line intact. For visible runs it selects the
+stable X11 GTK frontend without accelerated graphics or test-irrelevant audio;
+the VM is still created, supervised, and stopped by `mkosi vm`.
+
+The host needs x86-64 KVM, mkosi 26, QEMU with OVMF and its GTK UI, swtpm,
+`socat`, `jq`, Tesseract OCR, zstd, and the artifact-validation utilities used
+by `scripts/validate-artifacts.sh`.
+
 Prepare the disposable signed OCI fixture:
 
 ```console
@@ -579,8 +599,9 @@ unauthenticated `run0` denial, and password-authenticated elevation:
   /path/to/enrolled-ovmf-vars.bin
 ```
 
-This test opens a GTK VM display by default. Set `FIRSTBOOT_VM_DISPLAY=none`
-for headless automation. A successful run prints:
+This test always opens mkosi's GUI console so the actual VGA provisioning flow
+and systemd-boot firmware entry remain visible while the Bash QMP/OCR driver
+answers them. A successful run prints:
 
 ```text
 PARTICLEOS_FIRSTBOOT_CONSOLE_PASS user=particleadmin timezone=Etc/UTC run0=authenticated
@@ -598,7 +619,7 @@ SSH path with:
 The audit generates a disposable Ed25519 key, proves systemd-userdb exposes it
 while the home is inactive, disables every SSH password mechanism, answers the
 separate `systemd-home-fallback-shell` unlock prompt, enters the mounted home,
-and rejects SELinux denials from the SSH, userdb, or homed path. Its GTK VM is
+and rejects SELinux denials from the SSH, userdb, or homed path. Its mkosi VM is
 visible by default and is stopped automatically after the result is known. Set
 `HOMED_SSH_VM_DISPLAY=none` only for headless automation.
 
@@ -611,7 +632,7 @@ Then run the complete local VM audit:
   /path/to/container-fixture.raw
 ```
 
-Set `VM_AUDIT_DISPLAY=gtk` to open the guest display for every boot. The
+Set `VM_AUDIT_DISPLAY=gui` to open mkosi's guest display for every boot. The
 serial audit log remains authoritative and is still captured in the test
 directory. Omit the variable for headless automation.
 
@@ -638,7 +659,7 @@ PARTICLEOS_VM_AUDIT_PASS checks=<count>
 ```
 
 Set `VM_AUDIT_KEEP_FAILED=1` to retain a failed guest disk and serial logs for
-diagnosis. The runner still stops QEMU and swtpm.
+diagnosis. The runner still stops the mkosi VM and persistent TPM emulator.
 
 Qualify the complete update and rollback lifecycle with two authenticated OBS
 releases and the same enrolled OVMF variable store:
@@ -650,8 +671,8 @@ releases and the same enrolled OVMF variable store:
   /path/to/enrolled-ovmf-vars.bin
 ```
 
-Set `VM_UPDATE_AUDIT_DISPLAY=gtk` to show each update and rollback boot in a
-local QEMU window.
+Set `VM_UPDATE_AUDIT_DISPLAY=gui` to show each update and rollback boot in a
+local mkosi VM window.
 
 The first scenario downloads the candidate through the production
 systemd-sysupdate configuration, first proves that a renamed older signed UKI
@@ -666,7 +687,8 @@ all three counted boots, verifies three distinct encrypted-state receipts, and
 requires the uncounted base version to prune the rejected authorization.
 
 Set `VM_UPDATE_AUDIT_KEEP_FAILED=1` to retain disks and serial logs after a
-failure. The runner stops every QEMU and swtpm process in all scenarios.
+failure. The runner stops every mkosi VM and persistent TPM emulator in all
+scenarios.
 
 ## Residual Risks
 

@@ -2,38 +2,37 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
-    echo "usage: $0 ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS [OVMF_CODE]" >&2
+if [[ $# -ne 2 ]]; then
+    echo "usage: $0 ARTIFACT_DIRECTORY ENROLLED_OVMF_VARS" >&2
     exit 2
 fi
 
 repository=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=tests/lib/mkosi-vm.sh
+source "$repository/tests/lib/mkosi-vm.sh"
 artifact_directory=$(realpath "$1")
 ovmf_vars_source=$(realpath "$2")
-ovmf_code=${3:-/usr/share/qemu/ovmf-x86_64-smm-code.bin}
-ovmf_code=$(realpath "$ovmf_code")
+audit_timeout=${FIRSTBOOT_VM_TIMEOUT:-420}
 audit_tmpdir=${FIRSTBOOT_VM_TMPDIR:-$artifact_directory}
 keep_failed=${FIRSTBOOT_VM_KEEP_FAILED:-0}
-vm_display=${FIRSTBOOT_VM_DISPLAY:-gtk}
 
+[[ $audit_timeout =~ ^[1-9][0-9]*$ ]] || {
+    echo 'FIRSTBOOT_VM_TIMEOUT must be a positive number of seconds' >&2
+    exit 2
+}
 [[ $keep_failed == 0 || $keep_failed == 1 ]] || {
     echo 'FIRSTBOOT_VM_KEEP_FAILED must be 0 or 1' >&2
     exit 2
 }
-[[ $vm_display == none || $vm_display == gtk ]] || {
-    echo 'FIRSTBOOT_VM_DISPLAY must be none or gtk' >&2
-    exit 2
-}
-[[ -r /dev/kvm && -w /dev/kvm ]] || { echo '/dev/kvm is unavailable' >&2; exit 1; }
-for command in base64 cp env find mktemp pgrep pkill python3 qemu-system-x86_64 \
-        realpath swtpm tail tesseract tr truncate zstd; do
+mkosi_vm_require
+for command in cp find grep install jq mkfifo mktemp realpath socat tail tesseract \
+        truncate zstd; do
     command -v "$command" >/dev/null || {
         echo "missing required command: $command" >&2
         exit 1
     }
 done
 [[ -f $ovmf_vars_source ]] || { echo "missing OVMF variable store: $ovmf_vars_source" >&2; exit 1; }
-[[ -f $ovmf_code ]] || { echo "missing OVMF code image: $ovmf_code" >&2; exit 1; }
 [[ -d $audit_tmpdir && -w $audit_tmpdir ]] || {
     echo "first-boot audit directory is not writable: $audit_tmpdir" >&2
     exit 1
@@ -55,42 +54,23 @@ mapfile -t compressed_images < <(
 
 scratch=$(mktemp -d "$audit_tmpdir/.particleos-firstboot-audit.XXXXXXXX")
 swtpm_pid_file=$scratch/swtpm.pid
-qemu_active=0
-
-stop_tpm() {
-    local command_line='' pid=''
-    if [[ -s $swtpm_pid_file ]]; then
-        read -r pid <"$swtpm_pid_file" || true
-    fi
-    if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/comm && -r /proc/$pid/cmdline ]]; then
-        command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline")
-    fi
-    if [[ $command_line == *"$scratch/"* && $(<"/proc/$pid/comm") == swtpm ]]; then
-        kill "$pid" 2>/dev/null || true
-        for _ in {1..20}; do
-            [[ ! -e /proc/$pid ]] && break
-            sleep 0.1
-        done
-        if [[ -r /proc/$pid/comm && $(<"/proc/$pid/comm") == swtpm ]]; then
-            kill -KILL "$pid" 2>/dev/null || true
-        fi
-    fi
-}
-
-stop_qemu() {
-    local pattern="name particleos-firstboot-console-audit-$$"
-    pkill -TERM -f "$pattern" 2>/dev/null || true
-    for _ in {1..30}; do
-        pgrep -f "$pattern" >/dev/null || return 0
-        sleep 0.1
-    done
-    pkill -KILL -f "$pattern" 2>/dev/null || true
-}
+mkosi_pid=
+qmp_pid=
+qmp_input_fd=
+qmp_output_fd=
+serial_input_fd=
+machine="particleos-firstboot-audit-$$"
 
 cleanup() {
     local status=$?
-    ((qemu_active)) && stop_qemu
-    stop_tpm
+    if [[ $qmp_pid =~ ^[1-9][0-9]*$ ]]; then
+        kill "$qmp_pid" 2>/dev/null || true
+        wait "$qmp_pid" 2>/dev/null || true
+    fi
+    [[ -z $serial_input_fd ]] || exec {serial_input_fd}>&-
+    mkosi_vm_stop "${mkosi_pid:-0}" "$scratch" "$machine"
+    [[ -z ${mkosi_pid:-} ]] || wait "$mkosi_pid" 2>/dev/null || true
+    mkosi_vm_stop_tpm "$swtpm_pid_file" "$scratch"
     rm -rf -- "$snapshot_root"
     if ((status != 0)) && [[ $keep_failed == 1 ]]; then
         echo "Preserved failed first-boot audit state: $scratch" >&2
@@ -102,6 +82,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+fail() {
+    tail -240 "$log" >&2 2>/dev/null || true
+    printf 'native first-boot console audit failed: %s\n' "$*" >&2
+    exit 1
+}
+
 disk=$scratch/particleos.raw
 ovmf_vars=$scratch/ovmf-vars.bin
 tpm_state=$scratch/tpm
@@ -109,62 +95,214 @@ tpm_socket=$scratch/tpm.sock
 log=$scratch/firstboot.log
 qmp_socket=$scratch/qmp.sock
 vga_screenshot=$scratch/firstboot-vga.ppm
-mkdir -m 0700 "$tpm_state"
+serial_input=$scratch/serial.input
+credentials=$scratch/credentials
+mkdir -m 0700 "$tpm_state" "$credentials"
 cp --reflink=auto --sparse=always "$ovmf_vars_source" "$ovmf_vars"
 zstd --sparse -q -d -f -o "$disk" "${compressed_images[0]}"
 truncate -s 16G "$disk"
+install -m 0600 "$repository/tests/firstboot-console-audit.conf" "$credentials/systemd.unit-dropin.getty@tty1.service~90-particleos-firstboot-audit"
+install -m 0600 "$repository/tests/audit-activate.conf" "$credentials/systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit"
+install -m 0600 "$repository/tests/pcrlock-enroll-audit.conf" "$credentials/systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit"
+install -m 0600 "$repository/tests/firstboot-console-audit" "$credentials/firstboot-console-audit"
 
-audit_service=$(base64 -w0 "$repository/tests/firstboot-console-audit.conf")
-audit_script=$(base64 -w0 "$repository/tests/firstboot-console-audit")
-audit_activate=$(base64 -w0 "$repository/tests/audit-activate.conf")
-pcrlock_audit=$(base64 -w0 "$repository/tests/pcrlock-enroll-audit.conf")
+qmp_read_response() {
+    local response
+    while IFS= read -r -t 8 -u "$qmp_output_fd" response; do
+        jq -e 'has("event")' <<<"$response" >/dev/null 2>&1 && continue
+        jq -e 'has("error") | not' <<<"$response" >/dev/null || {
+            printf 'QMP request failed: %s\n' "$response" >&2
+            return 1
+        }
+        return 0
+    done
+    echo 'QMP response timed out' >&2
+    return 1
+}
 
-swtpm socket \
-    --tpm2 \
-    --tpmstate "dir=$tpm_state" \
-    --ctrl "type=unixio,path=$tpm_socket" \
-    --pid "file=$swtpm_pid_file" \
-    --log "file=$scratch/swtpm.log" \
-    --daemon \
-    --terminate
+qmp_execute() {
+    printf '%s\n' "$1" >&"$qmp_input_fd"
+    qmp_read_response
+}
 
-qemu_active=1
-if ! env \
-        FIRSTBOOT_QMP_SOCKET="$qmp_socket" \
-        FIRSTBOOT_VGA_SCREENSHOT="$vga_screenshot" \
-        "$repository/tests/firstboot-console-expect.py" "$log" -- \
-        qemu-system-x86_64 \
-        -name "particleos-firstboot-console-audit-$$" \
-        -machine q35,smm=on,accel=kvm \
-        -cpu host \
-        -m 2048 \
-        -smp 2 \
-        -global driver=cfi.pflash01,property=secure,value=on \
-        -drive "if=pflash,format=raw,unit=0,readonly=on,file=$ovmf_code" \
-        -drive "if=pflash,format=raw,unit=1,file=$ovmf_vars" \
-        -drive "if=virtio,format=raw,file=$disk" \
-        -chardev "socket,id=chrtpm,path=$tpm_socket" \
-        -tpmdev emulator,id=tpm0,chardev=chrtpm \
-        -device tpm-tis,tpmdev=tpm0 \
-        -netdev user,id=net0 \
-        -device virtio-net-pci,netdev=net0 \
-        -display "$vm_display" \
-        -serial stdio \
-        -qmp "unix:$qmp_socket,server=on,wait=off" \
-        -monitor none \
-        -smbios type=11,value='io.systemd.stub.kernel-cmdline-extra=systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.getty@tty1.service~90-particleos-firstboot-audit=$audit_service" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.systemd-remount-fs.service~90-particleos-audit=$audit_activate" \
-        -smbios "type=11,value=io.systemd.credential.binary:systemd.unit-dropin.particleos-pcrlock-enroll.service~90-particleos-audit=$pcrlock_audit" \
-        -smbios "type=11,value=io.systemd.credential.binary:firstboot-console-audit=$audit_script"; then
-    qemu_active=0
-    stop_tpm
-    tail -240 "$log" >&2 || true
-    echo 'native first-boot console audit failed' >&2
-    exit 1
-fi
-qemu_active=0
-stop_tpm
+qmp_connect() {
+    local greeting request
+    while [[ ! -S $qmp_socket ]]; do
+        process_running "$mkosi_pid" || fail 'mkosi VM exited before QMP became available'
+        ((SECONDS < deadline)) || fail 'QMP socket did not appear'
+        sleep 0.05
+    done
+    coproc QMP_CLIENT { socat - UNIX-CONNECT:"$qmp_socket"; }
+    qmp_output_fd=${QMP_CLIENT[0]}
+    qmp_input_fd=${QMP_CLIENT[1]}
+    qmp_pid=$QMP_CLIENT_PID
+    IFS= read -r -t 8 -u "$qmp_output_fd" greeting || fail 'QMP greeting timed out'
+    jq -e 'has("QMP")' <<<"$greeting" >/dev/null || fail 'invalid QMP greeting'
+    request='{"execute":"qmp_capabilities"}'
+    qmp_execute "$request" || fail 'QMP capability negotiation failed'
+}
 
+qmp_key() {
+    local code=$1 shifted=${2:-0} request
+    if [[ $shifted == 1 ]]; then
+        request=$(jq -cn --arg code "$code" '{execute:"input-send-event",arguments:{events:[
+            {type:"key",data:{down:true,key:{type:"qcode",data:"shift"}}},
+            {type:"key",data:{down:true,key:{type:"qcode",data:$code}}},
+            {type:"key",data:{down:false,key:{type:"qcode",data:$code}}},
+            {type:"key",data:{down:false,key:{type:"qcode",data:"shift"}}}
+        ]}}')
+    else
+        request=$(jq -cn --arg code "$code" '{execute:"input-send-event",arguments:{events:[
+            {type:"key",data:{down:true,key:{type:"qcode",data:$code}}},
+            {type:"key",data:{down:false,key:{type:"qcode",data:$code}}}
+        ]}}')
+    fi
+    qmp_execute "$request"
+    sleep 0.015
+}
+
+qmp_type_line() {
+    local value=$1 character code shifted index
+    for ((index = 0; index < ${#value}; index++)); do
+        character=${value:index:1}
+        shifted=0
+        case $character in
+            [a-z]) code=$character ;;
+            [A-Z]) code=${character,,}; shifted=1 ;;
+            [0-9]) code=$character ;;
+            /) code=slash ;;
+            -) code=minus ;;
+            *) fail "unsupported VGA input character: $character" ;;
+        esac
+        qmp_key "$code" "$shifted" || fail "could not type VGA character: $character"
+    done
+    qmp_key ret || fail 'could not submit VGA response'
+}
+
+screenshot_text() {
+    local request
+    request=$(jq -cn --arg file "$vga_screenshot" \
+        '{execute:"screendump",arguments:{filename:$file}}')
+    qmp_execute "$request" || return 1
+    tesseract "$vga_screenshot" stdout --psm 6 2>/dev/null |
+        tr '[:upper:]' '[:lower:]' |
+        tr '\n' ' ' |
+        sed -E 's/[[:space:]]+/ /g; s/passuord/password/g; s/neu /new /g'
+}
+
+process_running() {
+    local pid=$1 state
+    [[ -r /proc/$pid/status ]] || return 1
+    state=$(awk '$1 == "State:" { print $2 }' "/proc/$pid/status") || return 1
+    [[ $state != Z ]]
+}
+
+wait_log_count() {
+    local needle=$1 expected=$2 count
+    while ((SECONDS < deadline)); do
+        count=$({ grep -aoF -- "$needle" "$log" 2>/dev/null || true; } | wc -l)
+        ((count >= expected)) && return 0
+        process_running "$mkosi_pid" || return 1
+        sleep 0.1
+    done
+    return 1
+}
+
+mkosi_vm_start_tpm "$tpm_state" "$tpm_socket" "$swtpm_pid_file" "$scratch/swtpm.log"
+mkosi_vm_build_command "$repository" "$disk" "$ovmf_vars" "$machine" gui \
+    "$credentials" \
+    'systemd.mask=serial-getty@ttyS0.service systemd.mask=systemd-sysupdate.timer systemd.mask=systemd-sysupdate-reboot.timer' \
+    "$tpm_socket" stdio \
+    -netdev user,id=net0 \
+    -device virtio-net-pci,netdev=net0 \
+    -qmp "unix:$qmp_socket,server=on,wait=off" \
+    -monitor none
+
+mkfifo -m 0600 "$serial_input"
+exec {serial_input_fd}<>"$serial_input"
+"${MKOSI_VM_COMMAND[@]}" <"$serial_input" >"$log" 2>&1 &
+mkosi_pid=$!
+deadline=$((SECONDS + audit_timeout))
+qmp_connect
+
+firmware_entry_visible=0
+answers=('VgaSetup261Secure' 'VgaSetup261Secure' 'Etc/UTC' particleadmin 'VgaAdmin261Secure' 'VgaAdmin261Secure')
+for index in {0..5}; do
+    observed=0
+    while ((SECONDS < deadline)); do
+        process_running "$mkosi_pid" || fail "mkosi VM exited before VGA prompt $((index + 1))"
+        screen=$(screenshot_text || true)
+        if ((firmware_entry_visible == 0)) &&
+                [[ $screen == *'reboot into'* && $screen == *'firmware interface'* ]]; then
+            firmware_entry_visible=1
+            echo 'SYSTEMD_BOOT_FIRMWARE_ENTRY_VISIBLE'
+        fi
+        case $index in
+            0)
+                if [[ $screen == *'enter the new root password'* && $screen == *'empty to skip'* ]]; then
+                    observed=1
+                fi
+                ;;
+            1)
+                if [[ $screen == *'enter the new root password again'* ]]; then
+                    observed=1
+                fi
+                ;;
+            2)
+                if [[ $screen == *'enter the new timezone'* && $screen == *'name or number'* ]]; then
+                    observed=1
+                fi
+                ;;
+            3)
+                if [[ $screen == *'enter user name'* && $screen == *'create'* ]]; then
+                    observed=1
+                fi
+                ;;
+            4)
+                if [[ $screen == *'enter new password'* && $screen == *'particleadmin'* && $screen != *'repeat'* ]]; then
+                    observed=1
+                fi
+                ;;
+            5)
+                if [[ $screen == *'enter new password'* && $screen == *'particleadmin'* && $screen == *'repeat'* ]]; then
+                    observed=1
+                fi
+                ;;
+        esac
+        if ((observed)); then
+            printf 'FIRSTBOOT_VGA_PROMPT_VISIBLE index=%d\n' "$((index + 1))"
+            qmp_type_line "${answers[index]}"
+            break
+        fi
+        sleep 0.5
+    done
+    ((observed)) || fail "VGA first-boot prompt $((index + 1)) was not observed"
+done
+((firmware_entry_visible)) || fail 'reboot-into-firmware entry was not visible on VGA'
+
+wait_log_count 'login:' 1 || fail 'serial login prompt was not observed'
+printf 'particleadmin\n' >&"$serial_input_fd"
+wait_log_count 'Password:' 1 || fail 'serial login password prompt was not observed'
+printf 'VgaAdmin261Secure\n' >&"$serial_input_fd"
+wait_log_count 'PARTICLEOS_ADMIN_SHELL_READY' 1 || fail 'administrator shell did not become ready'
+printf '%s\n' \
+    'run0 --no-ask-password --pipe /usr/bin/true && exit 97 || echo PARTICLEOS_RUN0_NOAUTH_DENIED; run0 --pipe /usr/bin/bash /run/particleos-firstboot-run0-audit || { echo PARTICLEOS_RUN0_AUTH_FAILED; systemctl --no-pager --full status polkit.service systemd-homed.service systemd-logind.service; journalctl --boot --no-pager --output=short-monotonic -u polkit.service -u systemd-homed.service -u systemd-logind.service; journalctl --boot --no-pager --output=cat _TRANSPORT=audit | grep -Ei "(avc:.*denied|polkit-agent-helper|unit=run-p|acct=.?particleadmin)"; }; exit' \
+    >&"$serial_input_fd"
+wait_log_count 'Password:' 2 || fail 'run0 authentication prompt was not observed'
+printf 'VgaAdmin261Secure\n' >&"$serial_input_fd"
+wait_log_count 'PARTICLEOS_FIRSTBOOT_CONSOLE_PASS ' 1 || fail 'guest audit did not report success'
+
+while process_running "$mkosi_pid" && ((SECONDS < deadline)); do sleep 0.1; done
+process_running "$mkosi_pid" && fail 'mkosi VM did not power off after the console audit'
+set +e
+wait "$mkosi_pid"
+status=$?
+set -e
+mkosi_pid=
+((status == 0)) || fail "mkosi VM exited with status $status"
+
+grep -q 'PARTICLEOS_RUN0_NOAUTH_DENIED' "$log" || fail 'run0 did not report its unauthenticated denial'
+grep -q '==== AUTHENTICATION COMPLETE ====' "$log" || fail 'run0 did not complete interactive authentication'
+! grep -q 'PARTICLEOS_FIRSTBOOT_CONSOLE_FAIL ' "$log" || fail 'guest audit reported failure'
 grep 'PARTICLEOS_FIRSTBOOT_CONSOLE_PASS ' "$log"
-echo 'ParticleOS systemd-boot firmware entry, native VGA provisioning, and authenticated run0 audit passed; guest and TPM emulator are stopped.'
+echo 'ParticleOS systemd-boot firmware entry, native VGA provisioning, and authenticated run0 mkosi VM audit passed; guest and TPM emulator are stopped.'
