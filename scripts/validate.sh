@@ -418,7 +418,10 @@ require_fixed 'OnFailureJobMode=replace-irreversibly' mkosi.extra/usr/lib/system
 # Literal implementation pattern, not an expression for this validator.
 # shellcheck disable=SC2016
 require_fixed '!= "ParticleOS-Host_${candidate_version}_x86-64+0-"*.efi' mkosi.extra/usr/lib/particleos/pcrlock-prune-fallback 'fallback pruning requires a boot-manager-rejected candidate'
-require_fixed 'PARTICLEOS_PCRLOCK_FALLBACK_PRUNED' tests/run-update-rollback-audit.sh 'the lifecycle audit proves rejected authorization was pruned on fallback'
+require_fixed 'ConditionResult --value' tests/update-rollback-audit.sh 'the lifecycle audit proves fallback pruning was eligible on the known-good boot'
+require_fixed 'Result --value' tests/update-rollback-audit.sh 'the lifecycle audit proves fallback pruning completed successfully'
+require_fixed 'PARTICLEOS_PCRLOCK_FALLBACK_PRUNED base=' tests/update-rollback-audit.sh 'the lifecycle audit verifies the production fallback-prune journal marker'
+require_fixed 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_CONFIRMED' tests/run-update-rollback-audit.sh 'the host audit requires guest confirmation of fallback authorization pruning'
 require_fixed 'SuccessExitStatus=143' tests/vm-audit.sh 'VM health fixture treats its normal SIGTERM shutdown as successful'
 reject_fixed 'After=multi-user.target' tests/vm-audit-getty.conf 'VM audit avoids a target ordering cycle in the generated getty transaction'
 reject_fixed 'particleos-workload-health.service' tests/vm-audit-getty.conf 'disabled workload-health policy cannot create an indirect multi-user ordering cycle'

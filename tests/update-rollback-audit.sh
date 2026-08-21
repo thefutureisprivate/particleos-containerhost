@@ -196,6 +196,15 @@ staged)
         [[ ${#rejected_candidates[@]} -eq 1 ]]
         [[ ! -e $ready ]]
         check_policy_pcrs
+        [[ $(systemctl show -p ConditionResult --value \
+            particleos-pcrlock-fallback-prune.service) == yes ]]
+        [[ $(systemctl show -p Result --value \
+            particleos-pcrlock-fallback-prune.service) == success ]]
+        fallback_journal=$(journalctl --no-pager --output=cat -b \
+            -u particleos-pcrlock-fallback-prune.service)
+        grep -Fq "PARTICLEOS_PCRLOCK_FALLBACK_PRUNED base=$base_version candidate=$candidate_version" \
+            <<<"$fallback_journal"
+        echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_CONFIRMED base=$base_version candidate=$candidate_version"
         echo "UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS base=$base_version candidate=$candidate_version variants=${#component_files[@]} rejected=${rejected_candidates[0]##*/}"
         systemctl --no-block poweroff
         exit 0

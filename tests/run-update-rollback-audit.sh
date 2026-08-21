@@ -328,7 +328,7 @@ grep 'PARTICLEOS_WORKLOAD_CANDIDATE_REJECTED ' "$active_state/boot-2.log"
 [[ $(extract_usrhash "$active_state/boot-2.log") != "$fallback_base_usrhash" ]]
 run_guest health-fallback 3 clean
 grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-3.log"
-grep 'PARTICLEOS_PCRLOCK_FALLBACK_PRUNED ' "$active_state/boot-3.log"
+grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_CONFIRMED ' "$active_state/boot-3.log"
 [[ $(extract_usrhash "$active_state/boot-3.log") == "$fallback_base_usrhash" ]]
 
 echo 'ParticleOS A/B update, health fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'
