@@ -10,6 +10,16 @@ read -r candidate_version <"$CREDENTIALS_DIRECTORY/update-audit-candidate-versio
 # shellcheck source=/dev/null
 source /usr/lib/os-release
 
+current_usrhash=
+read -ra kernel_parameters </proc/cmdline
+for kernel_parameter in "${kernel_parameters[@]}"; do
+    case $kernel_parameter in
+        usrhash=*) current_usrhash=${kernel_parameter#usrhash=} ;;
+    esac
+done
+[[ $current_usrhash =~ ^[0-9a-f]{64}$ ]]
+echo "UPDATE_ROLLBACK_AUDIT_USRHASH hash=$current_usrhash"
+
 [[ $scenario == rollback-denial || $scenario == workload-quarantine ||
    $scenario == host-fallback ]]
 [[ $base_version =~ ^[0-9]+([.][0-9]+)*$ ]]
@@ -226,10 +236,8 @@ staged)
     [[ ${#component_files[@]} -eq 1 ]]
     [[ ! -e $ready ]]
     if [[ $scenario == workload-quarantine ]]; then
-        workload_journal=$(journalctl --no-pager --output=cat -b \
-            -u particleos-workload-health.service)
-        grep -Fq "PARTICLEOS_WORKLOAD_QUARANTINED version=$candidate_version attempts=3" \
-            <<<"$workload_journal"
+        [[ $(systemctl show -p ActiveState --value \
+            particleos-workload-health.service) == active ]]
     else
         [[ $scenario == rollback-denial ]]
     fi
@@ -238,6 +246,7 @@ staged)
     bootctl set-oneshot "$base_entry"
     write_state "$stage_file" rollback-attempt
     sync
+    echo "UPDATE_ROLLBACK_AUDIT_OLD_UKI_ONESHOT entry=$base_entry"
     echo "UPDATE_ROLLBACK_AUDIT_CANDIDATE_BLESSED base=$base_version candidate=$candidate_version variants=${#component_files[@]}"
     systemctl --no-block poweroff
     exit 0

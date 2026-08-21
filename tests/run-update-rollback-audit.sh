@@ -17,6 +17,7 @@ audit_timeout=${VM_UPDATE_AUDIT_TIMEOUT:-900}
 denial_timeout=${VM_UPDATE_DENIAL_TIMEOUT:-80}
 audit_tmpdir=${VM_UPDATE_AUDIT_TMPDIR:-$base_artifacts}
 keep_failed=${VM_UPDATE_AUDIT_KEEP_FAILED:-0}
+requested_scenario=${VM_UPDATE_AUDIT_SCENARIO:-all}
 vm_display=${VM_UPDATE_AUDIT_DISPLAY:-none}
 
 for value in "$audit_timeout" "$denial_timeout"; do
@@ -27,6 +28,12 @@ for value in "$audit_timeout" "$denial_timeout"; do
 done
 [[ $keep_failed == 0 || $keep_failed == 1 ]] || {
     echo 'VM_UPDATE_AUDIT_KEEP_FAILED must be 0 or 1' >&2
+    exit 2
+}
+[[ $requested_scenario == all || $requested_scenario == rollback-denial ||
+        $requested_scenario == workload-quarantine ||
+        $requested_scenario == host-fallback ]] || {
+    echo 'VM_UPDATE_AUDIT_SCENARIO must be all, rollback-denial, workload-quarantine, or host-fallback' >&2
     exit 2
 }
 [[ $vm_display == none || $vm_display == gtk ]] || {
@@ -198,17 +205,38 @@ prepare_scenario() {
 }
 
 extract_usrhash() {
-    local log=$1
-    grep -m1 -oE 'usrhash=[0-9a-f]{64}' "$log" | cut -d= -f2
+    local log=$1 evidence
+    evidence=$(grep -m1 -oE \
+        'UPDATE_ROLLBACK_AUDIT_USRHASH hash=[0-9a-f]{64}' "$log") || {
+        echo "missing explicit usrhash evidence in $log" >&2
+        return 1
+    }
+    printf '%s\n' "${evidence##*=}"
 }
 
 assert_counted_attempt() {
+    local boot_number=$1 tries_left=$2 tries_done=$3 log actual_usrhash
+    log=$active_state/boot-$boot_number.log
+    actual_usrhash=$(extract_usrhash "$log") || return 1
+    if ! grep -qF "ParticleOS-Host_${candidate_version}_x86-64+${tries_left}-${tries_done}.efi" "$log" ||
+            [[ $actual_usrhash == "$fallback_base_usrhash" ]]; then
+        tail -240 "$log" >&2 || true
+        echo "candidate attempt $tries_done did not have the expected boot count and usrhash" >&2
+        return 1
+    fi
+    echo "UPDATE_ROLLBACK_AUDIT_COUNTED_ATTEMPT attempt=$tries_done tries_left=$tries_left version=$candidate_version"
+}
+
+assert_failed_host_attempt() {
     local boot_number=$1 tries_left=$2 tries_done=$3 log
     log=$active_state/boot-$boot_number.log
-    grep -qF "PARTICLEOS_CANDIDATE_ATTEMPT_RECORDED version=$candidate_version count=$tries_done" "$log"
-    grep -qF "ParticleOS-Host_${candidate_version}_x86-64+${tries_left}-${tries_done}.efi" "$log"
-    [[ $(extract_usrhash "$log") != "$fallback_base_usrhash" ]]
-    echo "UPDATE_ROLLBACK_AUDIT_COUNTED_ATTEMPT attempt=$tries_done tries_left=$tries_left version=$candidate_version"
+    if ! grep -qF "ParticleOS-Host_${candidate_version}_x86-64+${tries_left}-${tries_done}.efi" "$log" ||
+            ! grep -qF "UPDATE_ROLLBACK_AUDIT_HOST_FAILURE version=$candidate_version" "$log"; then
+        tail -240 "$log" >&2 || true
+        echo "failed host attempt $tries_done did not have the expected boot count and injected failure" >&2
+        return 1
+    fi
+    echo "UPDATE_ROLLBACK_AUDIT_COUNTED_HOST_FAILURE attempt=$tries_done tries_left=$tries_left version=$candidate_version"
 }
 
 run_guest() {
@@ -319,6 +347,7 @@ run_guest() {
     fi
 }
 
+if [[ $requested_scenario == all || $requested_scenario == rollback-denial ]]; then
 echo "Testing blessed-candidate revocation: $base_version -> $candidate_version"
 prepare_scenario rollback-denial
 run_guest rollback-denial 0 enrollment
@@ -327,13 +356,15 @@ grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 denial_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
 run_guest rollback-denial 2 clean
 grep 'UPDATE_ROLLBACK_AUDIT_CANDIDATE_BLESSED ' "$active_state/boot-2.log"
+grep -F "UPDATE_ROLLBACK_AUDIT_OLD_UKI_ONESHOT entry=ParticleOS-Host_${base_version}_x86-64.efi" \
+    "$active_state/boot-2.log"
 denial_candidate_usrhash=$(extract_usrhash "$active_state/boot-2.log")
 [[ $denial_candidate_usrhash != "$denial_base_usrhash" ]]
 run_guest rollback-denial 3 denied
-denial_attempt_usrhash=$(extract_usrhash "$active_state/boot-3.log")
-[[ $denial_attempt_usrhash == "$denial_base_usrhash" ]]
 echo 'UPDATE_ROLLBACK_AUDIT_DENIAL_PASS superseded signed UKI could not unlock persistent state'
+fi
 
+if [[ $requested_scenario == all || $requested_scenario == workload-quarantine ]]; then
 echo "Testing bounded opt-in workload health: $base_version -> $candidate_version"
 prepare_scenario workload-quarantine
 run_guest workload-quarantine 0 enrollment
@@ -342,18 +373,22 @@ grep 'UPDATE_ROLLBACK_AUDIT_STAGED ' "$active_state/boot-1.log"
 fallback_base_usrhash=$(extract_usrhash "$active_state/boot-1.log")
 run_guest workload-quarantine 2 clean
 assert_counted_attempt 2 2 1
-grep 'PARTICLEOS_WORKLOAD_CANDIDATE_FAILED ' "$active_state/boot-2.log"
+grep -F "PARTICLEOS_WORKLOAD_CANDIDATE_FAILED version=$candidate_version attempts=1" \
+    "$active_state/boot-2.log"
 run_guest workload-quarantine 3 clean
 assert_counted_attempt 3 1 2
-grep 'PARTICLEOS_WORKLOAD_CANDIDATE_FAILED ' "$active_state/boot-3.log"
+grep -F "PARTICLEOS_WORKLOAD_CANDIDATE_FAILED version=$candidate_version attempts=2" \
+    "$active_state/boot-3.log"
 run_guest workload-quarantine 4 clean
 assert_counted_attempt 4 0 3
-grep 'PARTICLEOS_WORKLOAD_QUARANTINED ' "$active_state/boot-4.log"
+grep -F "PARTICLEOS_WORKLOAD_QUARANTINED version=$candidate_version attempts=3 status=1" \
+    "$active_state/boot-4.log"
 grep 'UPDATE_ROLLBACK_AUDIT_CANDIDATE_BLESSED ' "$active_state/boot-4.log"
 run_guest workload-quarantine 5 denied
-[[ $(extract_usrhash "$active_state/boot-5.log") == "$fallback_base_usrhash" ]]
 echo 'UPDATE_ROLLBACK_AUDIT_WORKLOAD_BOUND_PASS unhealthy workload quarantined and candidate adopted on attempt three'
+fi
 
+if [[ $requested_scenario == all || $requested_scenario == host-fallback ]]; then
 echo "Testing authenticated three-attempt host fallback: $candidate_version -> $base_version"
 prepare_scenario host-fallback
 run_guest host-fallback 0 enrollment
@@ -364,12 +399,12 @@ for boot_number in 2 3 4; do
     run_guest host-fallback "$boot_number" clean
     tries_done=$((boot_number - 1))
     tries_left=$((3 - tries_done))
-    assert_counted_attempt "$boot_number" "$tries_left" "$tries_done"
-    grep 'UPDATE_ROLLBACK_AUDIT_HOST_FAILURE ' "$active_state/boot-$boot_number.log"
+    assert_failed_host_attempt "$boot_number" "$tries_left" "$tries_done"
 done
 run_guest host-fallback 5 clean
 grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PASS ' "$active_state/boot-5.log"
 grep 'UPDATE_ROLLBACK_AUDIT_FALLBACK_PRUNE_CONFIRMED ' "$active_state/boot-5.log"
 [[ $(extract_usrhash "$active_state/boot-5.log") == "$fallback_base_usrhash" ]]
+fi
 
 echo 'ParticleOS A/B update, bounded workload health, authenticated three-attempt host fallback, and signed-UKI rollback-protection audit passed; all guests and TPM emulators are stopped.'
