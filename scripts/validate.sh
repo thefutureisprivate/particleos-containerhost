@@ -47,6 +47,13 @@ require_fixed '/usr/lib/nvpcr' mkosi.conf 'unused NvPCR definitions are removed'
 require_fixed 'needssslcertforbuild' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS project certificate is requested'
 require_fixed '[Content]' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS image closure uses the mkosi Content section'
 require_fixed '        basesystem' .obs/particleos-containerhost/x86-64/mkosi.conf 'OBS stages the implicit Fedora base package'
+fedora_release=$(sed -n 's/^Release=//p' mkosi.conf)
+[[ $fedora_release =~ ^[0-9]+$ ]] || {
+    fail 'Fedora release is a numeric version'
+    fedora_release=invalid
+}
+require_fixed "%if \"%_repository\" == \"fedora_${fedora_release}_images\"" .obs/project-config 'OBS image repository follows the Fedora release'
+require_fixed "Release: ${fedora_release}.<CI_CNT>.<B_CNT>" .obs/project-config 'OBS image version prefixes the unique build revision with the Fedora release'
 
 for type in usr usr-verity usr-verity-sig; do
     count="$(grep -rl "^Type=${type}$" mkosi.extra/usr/lib/repart.d | wc -l)"
