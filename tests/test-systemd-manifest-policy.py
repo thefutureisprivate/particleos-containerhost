@@ -64,15 +64,25 @@ def good_manifest() -> dict[str, object]:
     }
 
 
-def run_case(root: Path, case: str, mutate, accepted: bool) -> None:
+def run_case(
+    root: Path,
+    case: str,
+    mutate,
+    accepted: bool,
+    compressed: bool = True,
+) -> None:
     output = root / f"{case}-output"
     output.mkdir()
     document = good_manifest()
-    path = output / "ParticleOS-Host_44.86.1_x86-64.manifest.gz"
+    suffix = ".manifest.gz" if compressed else ".manifest"
+    path = output / f"ParticleOS-Host_44.86.1_x86-64{suffix}"
     mutate(document, path)
     if not path.exists() and not path.is_symlink():
-        with gzip.open(path, "wt", encoding="utf-8") as stream:
-            json.dump(document, stream)
+        if compressed:
+            with gzip.open(path, "wt", encoding="utf-8") as stream:
+                json.dump(document, stream)
+        else:
+            path.write_text(json.dumps(document))
     environment = os.environ.copy()
     environment.update({"OUTPUTDIR": str(output)})
     environment.pop("PARTICLEOS_OBS_SOURCES", None)
@@ -143,6 +153,12 @@ def main() -> None:
         root = Path(temporary)
         for case, mutate, accepted in cases:
             run_case(root, case, mutate, accepted)
+        run_case(root, "post-output-raw", lambda document, path: None, True, False)
+
+        def both_formats(document, path):
+            path.with_suffix("").write_text(json.dumps(document))
+
+        run_case(root, "both-formats", both_formats, False)
 
     print("exact systemd manifest policy tests passed")
 
