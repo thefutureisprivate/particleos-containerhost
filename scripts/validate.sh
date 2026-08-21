@@ -294,7 +294,14 @@ require_fixed 'DNSSEC=yes' mkosi.extra/usr/lib/systemd/resolved.conf.d/40-partic
 require_fixed 'baseurl=https://download.opensuse.org/repositories/system:/systemd:/stable/Fedora_44/' mkosi.profiles/obs-repos/systemd.repo 'systemd comes from the upstream stable OBS project'
 require_fixed 'repo_gpgcheck=1' mkosi.profiles/obs-repos/systemd.repo 'local systemd repository metadata is authenticated'
 require_fixed '261.2+5+gb40ecf731-57.14' mkosi.resources/systemd-version 'the reviewed systemd build is exact'
-require_fixed 'rpm -q --qf' mkosi.postinst.chroot 'image construction rejects any different signed systemd build'
+reject_fixed 'rpm -q --qf' mkosi.postinst.chroot 'the minimal image does not need the RPM CLI for build validation'
+require_fixed 'PostOutputScripts=%D/mkosi.scripts/validate-systemd-manifest' mkosi.conf 'local builds enforce the exact systemd package manifest'
+require_fixed 'PostOutputScripts=%D/mkosi.scripts/validate-systemd-manifest' mkosi.obs.conf 'OBS publication enforces the exact systemd package manifest'
+require_fixed 'EXPECTED_SYSTEMD_PACKAGES' mkosi.scripts/validate-systemd-manifest 'the reviewed systemd package set is exact'
+require_fixed 'systemd package set differs' mkosi.scripts/validate-systemd-manifest 'unexpected systemd subpackages fail closed'
+# Literal implementation string, not an expression for this validator.
+# shellcheck disable=SC2016
+require_fixed 'SRCDIR="$repository" OUTPUTDIR="$directory"' scripts/validate-artifacts.sh 'downloaded releases revalidate the exact systemd package manifest'
 require_fixed '0B2264A151F114677B1D0AAF25688B9E8208EED3' mkosi.postinst.chroot 'the runtime update key has one pinned primary fingerprint'
 reject_fixed 'packages built from upstream main' mkosi.profiles/obs-repos/systemd.repo 'the image no longer consumes moving systemd main'
 require_fixed '        binutils' mkosi.conf 'objcopy is present for runtime UKI identity verification'
@@ -681,6 +688,7 @@ python3 tests/test-repart-archive-policy.py && pass 'hostile repart archive case
 python3 tests/test-ipe-signature-archive-policy.py && pass 'hostile IPE signer-response archives are rejected' || failures=$((failures + 1))
 python3 tests/test-artifact-snapshot-policy.py && pass 'artifact validation uses an exact immutable release snapshot' || failures=$((failures + 1))
 python3 tests/test-uki-snapshot-policy.py && pass 'PCR policy generation uses stable verified UKI copies' || failures=$((failures + 1))
+python3 tests/test-systemd-manifest-policy.py && pass 'local and OBS builds reject a rolled-back systemd package set' || failures=$((failures + 1))
 
 for section in \
     '## Purpose' \

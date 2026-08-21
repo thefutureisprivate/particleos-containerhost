@@ -27,7 +27,7 @@ one_artifact() {
 disk="$(one_artifact 'ParticleOS-Host_*_x86-64.raw.zst')"
 uki="$(one_artifact 'ParticleOS-Host_*.efi')"
 one_artifact 'ParticleOS-Host_*_x86-64.esp.raw.zst' >/dev/null
-manifest="$(one_artifact 'ParticleOS-Host_*.manifest.gz')"
+one_artifact 'ParticleOS-Host_*.manifest.gz' >/dev/null
 os_release="$(one_artifact 'ParticleOS-Host_*.osrelease')"
 repart_archive="$(one_artifact 'ParticleOS-Host_*.repart.tar')"
 checksum_manifest="$(one_artifact 'ParticleOS-Host_*.SHA256SUMS')"
@@ -114,9 +114,8 @@ if grep -qE '^\.pcr(sig|pkey):' <<<"$uki_details"; then
     echo 'UKI unexpectedly contains a TPM-incompatible public-key PCR policy' >&2
     exit 1
 fi
-gzip -t "$manifest"
-zgrep -q '"name": "runsc"' "$manifest"
-zgrep -q '"name": "podman"' "$manifest"
+SRCDIR="$repository" OUTPUTDIR="$directory" \
+    "$repository/mkosi.scripts/validate-systemd-manifest"
 objcopy --dump-section ".initrd=$scratch/initrd" "$uki" "$scratch/uki.copy"
 lsinitrd "$scratch/initrd" >"$scratch/initrd.list"
 grep -qE ' etc/ipe/ipe-policy\.p7b$' "$scratch/initrd.list"

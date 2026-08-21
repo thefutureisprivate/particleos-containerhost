@@ -121,7 +121,8 @@ Readiness | systemd and Quadlet health gate | Container `HealthCmd=` result
 ## Features
 
 - Fedora 44 on x86-64, built with mkosi 26 and one exact upstream-stable
-  systemd build on the upstream ParticleOS layout.
+  systemd package set enforced against every local, OBS, and downloaded
+  release manifest.
 - Signed systemd-boot and UKI with UEFI Secure Boot enforcement.
 - Explicitly enabled systemd-boot menu access to UEFI firmware setup on
   supported VM firmware.

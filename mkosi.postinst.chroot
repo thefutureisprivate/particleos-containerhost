@@ -40,17 +40,6 @@ podman --version
 runsc_version=$(runsc --version)
 grep -Fq 'runsc version release-20260810.0' <<<"$runsc_version"
 
-# Pin the complete upstream-stable systemd build as one reviewed unit. Both
-# local and OBS builds fail closed until this file is deliberately updated.
-expected_systemd_version=$(cat /usr/lib/particleos/build-resources/systemd-version)
-[[ $expected_systemd_version =~ ^[0-9A-Za-z.+~^-]+-[0-9A-Za-z.+~^]+$ ]]
-for package in \
-    systemd systemd-boot systemd-container systemd-libs systemd-networkd \
-    systemd-networkd-defaults systemd-oomd-defaults systemd-pam \
-    systemd-resolved systemd-shared systemd-udev; do
-    [[ $(rpm -q --qf '%{VERSION}-%{RELEASE}\n' "$package") == "$expected_systemd_version" ]]
-done
-
 # systemd-pull verifies OBS update metadata with this exclusive project key.
 expected_key_fingerprint=0B2264A151F114677B1D0AAF25688B9E8208EED3
 mapfile -t update_key_fingerprints < <(
