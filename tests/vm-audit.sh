@@ -121,7 +121,7 @@ else
 fi
 chronyd_capabilities=$(systemctl show chronyd.service --property=CapabilityBoundingSet --value)
 if [[ $(systemctl show chronyd.service --property=ProtectClock --value) == no &&
-        $chronyd_capabilities == *CAP_SYS_TIME* &&
+        $chronyd_capabilities == *cap_sys_time* &&
         $(systemctl show chronyd.service --property=LockPersonality --value) == yes &&
         $(systemctl show chronyd.service --property=MemoryDenyWriteExecute --value) == yes &&
         $(systemctl show chronyd.service --property=PrivateTmp --value) == yes &&
