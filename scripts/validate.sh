@@ -103,7 +103,9 @@ require_fixed '--token-id "$token_id" "$state"' mkosi.extra/usr/lib/particleos/p
 reject_fixed '--keep-key' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap retirement does not retain the replayable volume key'
 require_fixed 'pcrlock-volume-key-rotated' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'volume-key rotation has a durable encrypted-state recovery receipt'
 # shellcheck disable=SC2016
-require_fixed '--wipe-slot="$bootstrap_keyslot"' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'only proved-obsolete PCR7 bootstrap slots are explicitly retired'
+require_fixed '--wipe-slot="$bootstrap_keyslot"' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'any remaining proved-obsolete PCR7 bootstrap key slot is explicitly retired'
+# shellcheck disable=SC2016
+require_fixed 'cryptsetup token remove --token-id "$bootstrap_token"' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'orphaned PCR7 token metadata is explicitly retired after volume-key rotation'
 require_fixed 'PARTICLEOS_PCRLOCK_FINALIZATION_RECOVERED' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'power loss after key rotation resumes without repeating or bypassing proof'
 # shellcheck disable=SC2016
 require_fixed '[[ $current_boot != "$previous_boot" ]]' mkosi.extra/usr/lib/particleos/pcrlock-enroll 'bootstrap removal requires a different boot ID'

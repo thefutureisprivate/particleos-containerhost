@@ -22,18 +22,33 @@ scan_tokens() {
         token=$(cryptsetup token export --token-id "$id" "$state" 2>/dev/null) || continue
         compact=${token//[[:space:]]/}
         [[ $compact == *'"type":"systemd-tpm2"'* ]] || continue
-        [[ $compact =~ \"keyslots\":\[\"([0-9]+)\"\] ]] || {
-            echo "TPM2 token $id does not reference exactly one numeric key slot" >&2
+        if [[ $compact =~ \"keyslots\":\[\"([0-9]+)\"\] ]]; then
+            keyslot=${BASH_REMATCH[1]}
+        elif [[ $compact == *'"keyslots":[]'* ]]; then
+            keyslot=
+        else
+            echo "TPM2 token $id has an ambiguous key-slot set" >&2
             return 1
-        }
-        keyslot=${BASH_REMATCH[1]}
+        fi
         if [[ $compact == *'"tpm2_pcrlock":true'* ]]; then
+            [[ -n $keyslot ]] || {
+                echo "PCR7+11 token $id has no numeric key slot" >&2
+                return 1
+            }
             pcrlock_tokens+=("$id")
             pcrlock_keyslots+=("$keyslot")
         elif [[ $compact == *'"tpm2-pcrs":[7]'* ]]; then
             bootstrap_tokens+=("$id")
             bootstrap_keyslots+=("$keyslot")
         fi
+    done
+}
+
+bootstrap_slots_are_live() {
+    local keyslot
+    [[ ${#bootstrap_tokens[@]} -ge 1 ]]
+    for keyslot in "${bootstrap_keyslots[@]}"; do
+        [[ -n $keyslot ]] || return 1
     done
 }
 
@@ -82,12 +97,13 @@ if [[ ! -e $pending ]]; then
     [[ ! -e $rotated ]]
     /usr/lib/particleos/pcrlock-refresh current
     scan_tokens
-    [[ ${#bootstrap_tokens[@]} -ge 1 ]]
+    bootstrap_slots_are_live
     if [[ ${#pcrlock_tokens[@]} -eq 0 ]]; then
         enroll_pcrlock
         scan_tokens
     fi
-    [[ ${#pcrlock_tokens[@]} -ge 1 && ${#bootstrap_tokens[@]} -ge 1 ]]
+    [[ ${#pcrlock_tokens[@]} -ge 1 ]]
+    bootstrap_slots_are_live
     read -r boot_id </proc/sys/kernel/random/boot_id
     write_state_file "$pending" \
         "pcrlock-bootstrap-pending $boot_id token-id ${pcrlock_tokens[0]}"
@@ -138,17 +154,28 @@ else
        -z ${extra:-} ]]
 fi
 
-# cryptsetup reencrypt retains old enrollment tokens even though their saved
-# headers wrap the now-obsolete volume key. Prove the replacement again, then
-# wipe only the numeric key slots referenced by PCR7 bootstrap tokens.
+# cryptsetup reencrypt retires the old key slot but can retain its now-orphaned
+# token record. Prove the replacement again, then remove only PCR7 bootstrap
+# slots that remain and their exact, already-classified token records.
 scan_tokens
 [[ ${#pcrlock_tokens[@]} -eq 1 &&
    ${pcrlock_tokens[0]} == "$token_id" ]]
 /usr/sbin/cryptsetup open --type luks2 --test-passphrase --token-only \
     --token-id "$token_id" "$state"
-for bootstrap_keyslot in "${bootstrap_keyslots[@]}"; do
-    [[ $bootstrap_keyslot != "${pcrlock_keyslots[0]}" ]]
-    /usr/bin/systemd-cryptenroll --wipe-slot="$bootstrap_keyslot" "$state"
+for index in "${!bootstrap_tokens[@]}"; do
+    bootstrap_token=${bootstrap_tokens[$index]}
+    bootstrap_keyslot=${bootstrap_keyslots[$index]}
+    if [[ -n $bootstrap_keyslot ]]; then
+        [[ $bootstrap_keyslot != "${pcrlock_keyslots[0]}" ]]
+        /usr/bin/systemd-cryptenroll --wipe-slot="$bootstrap_keyslot" "$state"
+    fi
+    if token=$(cryptsetup token export --token-id "$bootstrap_token" "$state" 2>/dev/null); then
+        compact=${token//[[:space:]]/}
+        [[ $compact == *'"type":"systemd-tpm2"'* &&
+           $compact == *'"tpm2-pcrs":[7]'* &&
+           $compact == *'"keyslots":[]'* ]]
+        cryptsetup token remove --token-id "$bootstrap_token" "$state"
+    fi
 done
 scan_tokens
 [[ ${#pcrlock_tokens[@]} -eq 1 &&

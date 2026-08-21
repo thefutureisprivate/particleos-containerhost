@@ -301,9 +301,10 @@ the current UKI in systemd-pcrlock's 650 kernel component slot, combines PCR 7
 and PCR 11, and adds the new token while retaining the PCR 7 bootstrap. It then
 reboots. On the next boot it explicitly unlock-tests that exact pcrlock token,
 then performs token-only LUKS2 re-encryption to rotate the effective volume key,
-records that transition durably in encrypted state, and explicitly wipes only
-the obsolete PCR 7 key slot while retaining the proved PCR policy. The receipt
-also makes an interrupted post-reencryption finalization resumable. A
+records that transition durably in encrypted state, and explicitly removes
+only remaining obsolete PCR 7 key slots and orphaned PCR 7 token records while
+retaining the proved PCR policy. The receipt also makes an interrupted
+post-reencryption finalization resumable. A
 bootstrap-era header then wraps an obsolete key. The 650 placement precedes the
 `750-enter-initrd` barrier at
 which state is unlocked.
